@@ -119,7 +119,7 @@ interface AppState {
 interface AppContextType extends AppState {
   addFolder: (path: string) => void;
   removeFolder: (path: string) => void;
-  startScan: (forceRescan?: boolean) => Promise<void>;
+  startScan: (forceRescan?: boolean, preScannedData?: { files: ScannedFile[]; stats: ScanStats; folderHash: string }) => Promise<void>;
   approveSuggestion: (id: string) => void;
   rejectSuggestion: (id: string) => void;
   approveAll: () => void;
@@ -305,7 +305,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const startScan = useCallback(async (forceRescan: boolean = false) => {
+  const startScan = useCallback(async (forceRescan: boolean = false, preScannedData?: { files: ScannedFile[]; stats: ScanStats; folderHash: string }) => {
     setState(prev => ({ 
       ...prev, 
       scanStatus: 'scanning', 
@@ -323,24 +323,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const cachedEntry = getCachedEntry(state.selectedFolders);
       const cachedFolderHash = cachedEntry?.folderHash || null;
       
-      // Step 1: Scan file system
+      // Step 1: Get file data (client-side or server-side)
       setState(prev => ({ ...prev, scanProgress: 10 }));
-      
-      const scanResponse = await fetch('/api/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          folders: state.selectedFolders,
-          cachedFolderHash: forceRescan ? null : cachedFolderHash,
-          forceRescan,
-        }),
-      });
 
-      if (!scanResponse.ok) {
-        throw new Error('Failed to scan folders');
+      let scanData: { files: ScannedFile[]; stats: any; folderHash: string; isCacheHit: boolean };
+
+      if (preScannedData) {
+        // Client-side scan already completed (for Vercel deployment)
+        const isCacheHit = !forceRescan && cachedFolderHash === preScannedData.folderHash;
+        scanData = { ...preScannedData, isCacheHit };
+      } else {
+        // Server-side scan fallback (for local development)
+        const scanResponse = await fetch('/api/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            folders: state.selectedFolders,
+            cachedFolderHash: forceRescan ? null : cachedFolderHash,
+            forceRescan,
+          }),
+        });
+
+        if (!scanResponse.ok) {
+          throw new Error('Failed to scan folders');
+        }
+
+        scanData = await scanResponse.json();
       }
-
-      const scanData = await scanResponse.json();
       const { folderHash, isCacheHit } = scanData;
       
       // If cache hit and folder is optimized, skip analysis

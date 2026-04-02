@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { GEMINI_MODELS } from '@/lib/gemini';
 
-const API_KEY = 'AIzaSyBAoC3eK6wX5iyP6vvf9W6O7oTG7MHsveg';
+const API_KEY = process.env.GEMINI_API_KEY || '';
 
 const PRIMARY_MODEL = GEMINI_MODELS.PRIMARY;     // gemini-3.1-pro-preview
 const FALLBACK_MODEL = GEMINI_MODELS.FALLBACK;   // gemini-3.1-flash-lite-preview

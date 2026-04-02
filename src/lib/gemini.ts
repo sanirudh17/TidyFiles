@@ -7,7 +7,7 @@
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const API_KEY = 'AIzaSyBAoC3eK6wX5iyP6vvf9W6O7oTG7MHsveg';
+const API_KEY = process.env.GEMINI_API_KEY || '';
 
 export const GEMINI_MODELS = {
   PRIMARY: 'gemini-3.1-pro-preview',
