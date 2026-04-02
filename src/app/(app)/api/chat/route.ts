@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
 
     const lastMessage = messages[messages.length - 1];
     console.log('[Chat API] Query:', lastMessage.content.substring(0, 50));
-    console.log('[Chat API] Using Gemini 3.1 Flash-Lite for chat');
+    console.log('[Chat API] Using Gemini 3 Flash Preview for chat');
 
     const result = await geminiChat.chat(lastMessage.content, context);
     

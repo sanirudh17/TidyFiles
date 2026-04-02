@@ -4,7 +4,7 @@ TidyFiles is an AI-powered file organization desktop assistant that helps you sa
 
 ## Features
 
-- **Generative AI Organization**: Analyzes your files using Gemini 3.1 Pro to suggest intelligent folder structures (e.g., grouping by project, date, or category).
+- **Generative AI Organization**: Analyzes your files using Gemini 3 Pro Preview to suggest intelligent folder structures (e.g., grouping by project, date, or category).
 - **Review-First Philosophy**: No files are moved or altered without your explicit approval. You review the planned changes before they are executed.
 - **Desktop Dashboard Experience**: An intuitive, clean dashboard interface that runs locally, giving you total control and visibility over your file system.
 - **Supabase Authentication**: Secure user authentication (Sign Up / Sign In) powered natively by Supabase, isolating the dashboard safely.

@@ -9,9 +9,9 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 const API_KEY = process.env.GEMINI_API_KEY || '';
 
 export const GEMINI_MODELS = {
-  PRIMARY: 'gemini-2.5-pro',
-  FALLBACK: 'gemini-2.5-flash-lite',
-  VISION: 'gemini-2.5-flash',
+  PRIMARY: 'gemini-3-pro-preview',
+  FALLBACK: 'gemini-3-flash-preview',
+  VISION: 'gemini-3-flash-preview',
 };
 
 const MODELS = {
@@ -145,7 +145,7 @@ Generate a concise 3-paragraph professional summary for the user. Include key st
   }
 
   async organizeFiles(files: FileInfo[], basePath: string): Promise<GeminiResponse> {
-    const fileSummary = files.slice(0, 100).map(f => ({
+    const fileSummary = files.slice(0, 500).map(f => ({
       id: f.id,
       name: f.name,
       ext: f.extension || f.name.split('.').pop() || '',
@@ -158,21 +158,24 @@ Generate a concise 3-paragraph professional summary for the user. Include key st
       categoryStats[f.category] = (categoryStats[f.category] || 0) + 1;
     });
 
-    const prompt = `Analyze ${files.length} Windows files for optimal folder structure.
+    const prompt = `Analyze ${files.length} Windows files for optimal file organization into grouped folders.
 
 FILES TO ORGANIZE:
 ${JSON.stringify(fileSummary, null, 2)}
-${files.length > 100 ? `\n... and ${files.length - 100} more files` : ''}
+${files.length > 500 ? `\n... and ${files.length - 500} more files` : ''}
 
 CATEGORY BREAKDOWN:
 ${Object.entries(categoryStats).map(([cat, count]) => `- ${cat}: ${count} files`).join('\n')}
 
 BASE PATH: ${basePath}
 
-Output 4-8 folders max:
-- Group by date (YYYY-MM), type, prefixes, or topics
-- Use descriptive names: "2026-01-Assignments", "CS-Java-Code"
-- Each file in exactly ONE folder
+CRITICAL RULES FOR FOLDER NAMES:
+- Be EXTREMELY SPECIFIC. Do NOT use generic names like "Documents", "Images", "Code", or "Other".
+- Deduce the actual topics, projects, subjects, contexts, or clients from the filenames.
+- e.g., Instead of "2026-01-Assignments", use "Physics-Mechanics-Assignments" if files are physics assignments.
+- e.g., Instead of "React Code", use "NextJS-Auth-Components".
+- You can create from 3 to 20 highly specific folders if needed to accurately group the files.
+- Each file must go into exactly ONE folder.
 
 RESPOND WITH ONLY VALID JSON:
 {
@@ -186,15 +189,18 @@ RESPOND WITH ONLY VALID JSON:
   "unassigned": ["id3", "id4"]
 }`;
 
+    const generationConfig = {
+      temperature: 0.1,
+      topK: 32,
+      topP: 0.95,
+      maxOutputTokens: 8192,
+      responseMimeType: 'application/json' as const,
+    };
+
     try {
       const model = this.client.getGenerativeModel({
         model: MODELS.FILE_PRO,
-        generationConfig: {
-          temperature: 0.1,
-          topK: 32,
-          topP: 0.95,
-          maxOutputTokens: 4096,
-        },
+        generationConfig,
       });
 
       console.log(`[Gemini Organize] Using ${MODELS.FILE_PRO}`);
@@ -204,18 +210,40 @@ RESPOND WITH ONLY VALID JSON:
       console.log('[Gemini Organize] Success');
       return { success: true, model: MODELS.FILE_PRO, response: text };
     } catch (error: any) {
-      console.error('Organize Error:', error.message);
-      return { 
-        success: false, 
-        model: MODELS.FILE_PRO, 
-        response: JSON.stringify({
-          folders: [
-            { name: 'Documents', reasoning: 'General documents', fileIds: [] },
-            { name: 'Code', reasoning: 'Source code', fileIds: [] },
-          ],
-          unassigned: [],
-        }) 
-      };
+      console.warn(`[Gemini Organize] ${MODELS.FILE_PRO} failed: ${error.message}`);
+
+      try {
+        const fallbackModel = this.client.getGenerativeModel({
+          model: MODELS.CHAT_FLASH_LITE,
+          generationConfig,
+        });
+
+        console.log(`[Gemini Organize] Falling back to ${MODELS.CHAT_FLASH_LITE}`);
+        const fallbackResult = await fallbackModel.generateContent(prompt);
+        const fallbackText = fallbackResult.response.text();
+
+        console.log('[Gemini Organize] Fallback success');
+        return {
+          success: true,
+          model: MODELS.CHAT_FLASH_LITE,
+          response: fallbackText,
+          fallbackUsed: true,
+        };
+      } catch (fallbackError: any) {
+        console.error('Organize Error:', fallbackError.message);
+        return { 
+          success: false, 
+          model: MODELS.FILE_PRO, 
+          response: JSON.stringify({
+            folders: [
+              { name: 'Documents', reasoning: 'General documents', fileIds: [] },
+              { name: 'Code', reasoning: 'Source code', fileIds: [] },
+            ],
+            unassigned: [],
+          }),
+          fallbackUsed: true,
+        };
+      }
     }
   }
 
@@ -253,13 +281,16 @@ JSON response:
   ]
 }`;
 
+    const generationConfig = {
+      temperature: 0.1,
+      maxOutputTokens: 2048,
+      responseMimeType: 'application/json' as const,
+    };
+
     try {
       const model = this.client.getGenerativeModel({
         model: MODELS.FILE_PRO,
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 2048,
-        },
+        generationConfig,
       });
 
       console.log(`[Gemini Analyze] Using ${MODELS.FILE_PRO}`);
@@ -268,12 +299,33 @@ JSON response:
 
       return { success: true, model: MODELS.FILE_PRO, response: text };
     } catch (error: any) {
-      console.error('Analyze Error:', error.message);
-      return { 
-        success: false, 
-        model: MODELS.FILE_PRO, 
-        response: JSON.stringify({ suggestions: [] }) 
-      };
+      console.warn(`[Gemini Analyze] ${MODELS.FILE_PRO} failed: ${error.message}`);
+
+      try {
+        const fallbackModel = this.client.getGenerativeModel({
+          model: MODELS.CHAT_FLASH_LITE,
+          generationConfig,
+        });
+
+        console.log(`[Gemini Analyze] Falling back to ${MODELS.CHAT_FLASH_LITE}`);
+        const fallbackResult = await fallbackModel.generateContent(prompt);
+        const fallbackText = fallbackResult.response.text();
+
+        return {
+          success: true,
+          model: MODELS.CHAT_FLASH_LITE,
+          response: fallbackText,
+          fallbackUsed: true,
+        };
+      } catch (fallbackError: any) {
+        console.error('Analyze Error:', fallbackError.message);
+        return { 
+          success: false, 
+          model: MODELS.FILE_PRO, 
+          response: JSON.stringify({ suggestions: [] }),
+          fallbackUsed: true,
+        };
+      }
     }
   }
 }

@@ -475,7 +475,7 @@ export function OrganizeTree({ files, basePath, onApply, onApplyComplete }: Orga
           {isGenerating ? (
             <>
               <Loader2 className="w-5 h-5 animate-spin" />
-              Analyzing with Gemini 3 Pro...
+              Analyzing with Gemini 3 Pro Preview...
             </>
           ) : (
             <>

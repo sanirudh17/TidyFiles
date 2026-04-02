@@ -250,7 +250,7 @@ export function AIChatSidebar() {
                     {connectionStatus === 'connected' && (
                       <span className="flex items-center gap-1 text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded">
                         <Wifi className="w-3 h-3" />
-                        Gemini 3
+                        Gemini 3 Preview
                       </span>
                     )}
                     {connectionStatus === 'error' && (
@@ -351,7 +351,7 @@ export function AIChatSidebar() {
                       {/* Model indicator */}
                       {msg.modelUsed && msg.role === 'assistant' && !msg.isError && (
                         <p className="text-[10px] text-muted-foreground mt-1 opacity-60">
-                          via {msg.modelUsed.includes('3-pro') ? 'Gemini 3 Pro' : msg.modelUsed.includes('3-flash') ? 'Gemini 3 Flash' : msg.modelUsed}
+                          via {msg.modelUsed.includes('3-pro') ? 'Gemini 3 Pro Preview' : msg.modelUsed.includes('3-flash') ? 'Gemini 3 Flash Preview' : msg.modelUsed}
                         </p>
                       )}
                       
@@ -388,7 +388,7 @@ export function AIChatSidebar() {
                   </div>
                   <div className="bg-muted rounded-lg px-3 py-2 flex items-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                    <span className="text-sm text-muted-foreground">Thinking with Gemini 3...</span>
+                    <span className="text-sm text-muted-foreground">Thinking with Gemini 3 Preview...</span>
                   </div>
                 </div>
               )}
