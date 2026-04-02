@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { applyFileChanges, type ApplyResponse } from '@/lib/client-file-ops';
 
 // Types
 export interface ScannedFile {
@@ -124,7 +125,7 @@ interface AppContextType extends AppState {
   rejectSuggestion: (id: string) => void;
   approveAll: () => void;
   rejectAll: () => void;
-  applyChanges: () => Promise<void>;
+  applyChanges: (options?: { createBackups?: boolean }) => Promise<ApplyResponse | undefined>;
   updateSettings: (settings: Partial<AppSettings>) => void;
   resetScan: () => void;
   markAsOptimized: () => void;
@@ -326,7 +327,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // Step 1: Get file data (client-side or server-side)
       setState(prev => ({ ...prev, scanProgress: 10 }));
 
-      let scanData: { files: ScannedFile[]; stats: any; folderHash: string; isCacheHit: boolean };
+      let scanData: { files: ScannedFile[]; stats: ScanStats; folderHash: string; isCacheHit: boolean };
 
       if (preScannedData) {
         // Client-side scan already completed (for Vercel deployment)
@@ -479,9 +480,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  const applyChanges = useCallback(async () => {
+  const applyChanges = useCallback(async (options?: { createBackups?: boolean }) => {
     const approvedSuggestions = state.suggestions.filter(s => s.status === 'approved');
     const rejectedSuggestions = state.suggestions.filter(s => s.status === 'rejected');
+    const suggestionKey = (suggestion: Suggestion) => `${suggestion.fileId}:${suggestion.action}:${suggestion.originalFile.path}`;
     
     if (approvedSuggestions.length === 0) return;
 
@@ -496,24 +498,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }));
 
     try {
-      // Call the apply API to actually perform file operations
-      const response = await fetch('/api/apply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          changes,
-          createBackups: state.settings.createBackups,
-        }),
+      const result = await applyFileChanges(changes, {
+        createBackups: options?.createBackups ?? state.settings.createBackups,
       });
-
-      const result = await response.json();
 
       // Create history entry with actual results including original/new names for diff
       const historyEntry: HistoryEntry = {
         id: Math.random().toString(36).substring(2, 15),
         date: new Date().toISOString(),
         action: `Applied ${result.applied || 0} changes`,
-        details: `${approvedSuggestions.filter(s => s.action === 'rename').length} renames, ${approvedSuggestions.filter(s => s.action === 'delete').length} deletes, ${approvedSuggestions.filter(s => s.action === 'move').length} moves`,
+        details: `${approvedSuggestions.filter(s => s.action === 'rename').length} renames, ${approvedSuggestions.filter(s => s.action === 'delete').length} deletes, ${approvedSuggestions.filter(s => s.action === 'move').length} moves, ${approvedSuggestions.filter(s => s.action === 'archive').length} archives`,
         status: result.success ? 'Success' : (result.applied > 0 ? 'Success' : 'Failed'),
         rootFolder: state.selectedFolders[0] || '',
         snapshotHashBefore: state.folderHash || '',
@@ -532,11 +526,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       // Update cache with decisions - mark applied and rejected
       const cachedEntry = getCachedEntry(state.selectedFolders);
+      const succeededKeys = new Set(
+        result.results
+          .filter((item) => item.success)
+          .map((item) => `${item.fileId}:${item.action}:${item.originalPath}`)
+      );
+      const failedApprovedSuggestions = approvedSuggestions.filter((suggestion) => !succeededKeys.has(suggestionKey(suggestion)));
+
       if (cachedEntry) {
         const updatedDecisions = { ...cachedEntry.decisions };
         
         // Mark approved suggestions as applied
         for (const s of approvedSuggestions) {
+          if (!succeededKeys.has(suggestionKey(s))) {
+            continue;
+          }
+
           updatedDecisions[s.originalFile.path] = {
             originalName: s.originalFile.name,
             appliedName: s.proposedName,
@@ -557,7 +562,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
         
         // Check if all suggestions are handled
-        const remainingSuggestions = state.suggestions.filter(s => s.status === 'pending');
+        const remainingSuggestions = [
+          ...state.suggestions.filter(s => s.status === 'pending'),
+          ...failedApprovedSuggestions,
+        ];
         const allHandled = remainingSuggestions.length === 0;
         
         const updatedCache: FolderCacheEntry = {
@@ -580,7 +588,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setState(prev => ({
         ...prev,
         history: [historyEntry, ...prev.history],
-        suggestions: prev.suggestions.filter(s => s.status === 'pending'), // Keep only pending
+        suggestions: prev.suggestions.filter((suggestion) =>
+          suggestion.status === 'pending' ||
+          (suggestion.status === 'approved' && failedApprovedSuggestions.some((failed) => suggestionKey(failed) === suggestionKey(suggestion)))
+        ),
       }));
 
       return result;
@@ -607,7 +618,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       throw error;
     }
-  }, [state.suggestions, state.settings.createBackups, state.selectedFolders, getCachedEntry, saveCacheEntry]);
+  }, [state.suggestions, state.settings.createBackups, state.selectedFolders, state.folderHash, getCachedEntry, saveCacheEntry]);
 
   const updateSettings = useCallback((newSettings: Partial<AppSettings>) => {
     setState(prev => ({

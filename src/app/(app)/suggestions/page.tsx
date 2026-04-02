@@ -22,7 +22,6 @@ import {
   AlertTriangle,
   Shield,
   Image as ImageIcon,
-  ChevronRight as ChevronRightIcon
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -104,39 +103,28 @@ function WhyPopover({ explanation, reason, confidence, fileName }: { explanation
   const popoverRef = React.useRef<HTMLDivElement>(null);
   
   const displayText = explanation || reason;
-  
-  // Calculate position when opened
-  useEffect(() => {
-    if (isOpen && buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      const popoverWidth = 320;
-      const popoverHeight = 220; // Approximate
-      
-      // Determine if we should place above or below
-      const spaceAbove = rect.top;
-      const spaceBelow = window.innerHeight - rect.bottom;
-      const placement = spaceAbove > popoverHeight ? 'top' : 'bottom';
-      
-      // Calculate horizontal position (prefer right-aligned, flip if needed)
-      let left = rect.right - popoverWidth + 20;
-      
-      // Check if would go off left edge
-      if (left < 16) {
-        left = rect.left - 20; // Flip to left side
-      }
-      // Check if would go off right edge
-      if (left + popoverWidth > window.innerWidth - 16) {
-        left = window.innerWidth - popoverWidth - 16;
-      }
-      
-      // Calculate vertical position
-      const top = placement === 'top' 
-        ? rect.top - 8 
-        : rect.bottom + 8;
-      
-      setPosition({ top, left, placement });
+
+  const updatePosition = useCallback(() => {
+    if (!buttonRef.current) {
+      return;
     }
-  }, [isOpen]);
+
+    const rect = buttonRef.current.getBoundingClientRect();
+    const popoverWidth = 320;
+    const popoverHeight = 220;
+    const placement = rect.top > popoverHeight ? 'top' : 'bottom';
+
+    let left = rect.right - popoverWidth + 20;
+    if (left < 16) {
+      left = rect.left - 20;
+    }
+    if (left + popoverWidth > window.innerWidth - 16) {
+      left = window.innerWidth - popoverWidth - 16;
+    }
+
+    const top = placement === 'top' ? rect.top - 8 : rect.bottom + 8;
+    setPosition({ top, left, placement });
+  }, []);
   
   // Close on Escape
   useEffect(() => {
@@ -154,7 +142,13 @@ function WhyPopover({ explanation, reason, confidence, fileName }: { explanation
         ref={buttonRef}
         onClick={(e) => {
           e.stopPropagation();
-          setIsOpen(!isOpen);
+          if (isOpen) {
+            setIsOpen(false);
+            return;
+          }
+
+          updatePosition();
+          setIsOpen(true);
         }}
         className="p-1 hover:bg-muted rounded-full text-muted-foreground hover:text-foreground transition-colors"
         title="Why this suggestion?"
@@ -347,7 +341,7 @@ function ConfirmDialog({
           <div className="flex-1">
             <h3 className="font-semibold text-lg">Delete file in subfolder?</h3>
             <p className="text-muted-foreground text-sm mt-2">
-              You're about to delete <strong className="text-foreground">{fileName}</strong> which is inside the <strong className="text-foreground">'{parentFolder}'</strong> folder.
+              You&apos;re about to delete <strong className="text-foreground">{fileName}</strong> which is inside the <strong className="text-foreground">{parentFolder}</strong> folder.
             </p>
             <p className="text-muted-foreground text-sm mt-2">
               This may belong to an installed application. Are you sure you want to proceed?
@@ -384,7 +378,6 @@ export default function SuggestionsPage() {
   const [filterAction, setFilterAction] = useState<FilterAction>('all');
   const [filterConfidence, setFilterConfidence] = useState<FilterConfidence>('all');
   const [filterFolder, setFilterFolder] = useState<string>(''); // Filter by parent folder
-  const [groupByFolder, setGroupByFolder] = useState(false); // Group by parent folder toggle
   const [currentPage, setCurrentPage] = useState(1);
   const [showFilters, setShowFilters] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ isOpen: boolean; suggestionId: string; fileName: string; parentFolder: string } | null>(null);
@@ -420,21 +413,6 @@ export default function SuggestionsPage() {
     });
   }, [pendingSuggestions, filterAction, filterConfidence, filterFolder, selectedFolders]);
 
-  // Group suggestions by parent folder if enabled
-  const groupedSuggestions = useMemo(() => {
-    if (!groupByFolder) return null;
-    
-    const groups: Record<string, typeof filteredSuggestions> = {};
-    filteredSuggestions.forEach(s => {
-      const pathInfo = getPathInfo(s.originalFile.path, selectedFolders);
-      const folder = pathInfo.parentFolder || '(root)';
-      if (!groups[folder]) groups[folder] = [];
-      groups[folder].push(s);
-    });
-    
-    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
-  }, [filteredSuggestions, groupByFolder, selectedFolders]);
-
   // Handle folder filter click from FilePath
   const handleFolderClick = useCallback((folder: string) => {
     setFilterFolder(prev => prev === folder ? '' : folder);
@@ -469,6 +447,26 @@ export default function SuggestionsPage() {
       approveSuggestion(suggestion.id);
     }
   }, [selectedFolders, approveSuggestion]);
+
+  const actionCounts = useMemo(() => {
+    const counts = { rename: 0, delete: 0, move: 0, archive: 0, merge: 0 };
+    pendingSuggestions.forEach(s => {
+      if (s.action in counts) counts[s.action as keyof typeof counts]++;
+    });
+    return counts;
+  }, [pendingSuggestions]);
+
+  const protectedCount = useMemo(() => {
+    return pendingSuggestions.filter(s => {
+      const path = s.originalFile.path.toLowerCase();
+      return path.includes('program files') || 
+             path.includes('windows') || 
+             path.includes('appdata') ||
+             /\.(dll|exe|sys)$/i.test(s.originalFile.name);
+    }).length;
+  }, [pendingSuggestions]);
+
+  const approvedCount = suggestions.filter(s => s.status === 'approved').length;
 
   // Show friendly message if no scan
   if (scanStatus !== 'complete') {
@@ -523,28 +521,6 @@ export default function SuggestionsPage() {
     selectedIds.forEach(id => rejectSuggestion(id));
     setSelectedIds(new Set());
   };
-
-  // Count by action type
-  const actionCounts = useMemo(() => {
-    const counts = { rename: 0, delete: 0, move: 0, archive: 0, merge: 0 };
-    pendingSuggestions.forEach(s => {
-      if (s.action in counts) counts[s.action as keyof typeof counts]++;
-    });
-    return counts;
-  }, [pendingSuggestions]);
-
-  // Count protected/critical files
-  const protectedCount = useMemo(() => {
-    return pendingSuggestions.filter(s => {
-      const path = s.originalFile.path.toLowerCase();
-      return path.includes('program files') || 
-             path.includes('windows') || 
-             path.includes('appdata') ||
-             /\.(dll|exe|sys)$/i.test(s.originalFile.name);
-    }).length;
-  }, [pendingSuggestions]);
-
-  const approvedCount = suggestions.filter(s => s.status === 'approved').length;
 
   return (
     <div className="space-y-6 h-full flex flex-col">
@@ -791,7 +767,6 @@ export default function SuggestionsPage() {
                 </tr>
               ) : (
                 paginatedSuggestions.map((suggestion) => {
-                  const pathInfo = getPathInfo(suggestion.originalFile.path, selectedFolders);
                   const isProtected = suggestion.originalFile.path.toLowerCase().includes('program files') ||
                                      /\.(dll|exe|sys)$/i.test(suggestion.originalFile.name);
                   

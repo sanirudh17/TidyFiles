@@ -80,6 +80,19 @@ const EXCLUDED_FOLDERS = new Set([
   '.idea', 'vendor', 'dist', 'build', '.cache', 'coverage',
 ]);
 
+type DirectoryPickerOptions = {
+  mode?: 'read' | 'readwrite';
+  startIn?: WellKnownDirectory;
+};
+
+type DirectoryPickerWindow = Window & typeof globalThis & {
+  showDirectoryPicker?: (options?: DirectoryPickerOptions) => Promise<FileSystemDirectoryHandle>;
+};
+
+type DirectoryHandleWithValues = FileSystemDirectoryHandle & {
+  values(): AsyncIterable<FileSystemHandle>;
+};
+
 function getFileTypeInfo(ext: string): { type: ScannedFile['type']; category: string } {
   return FILE_TYPE_MAP[ext.toLowerCase()] || { type: 'unknown', category: 'Other' };
 }
@@ -106,11 +119,16 @@ export type WellKnownDirectory = 'desktop' | 'documents' | 'downloads' | 'music'
 
 export async function pickDirectory(startIn?: WellKnownDirectory): Promise<FileSystemDirectoryHandle | null> {
   try {
-    const options: any = { mode: 'read' };
+    const pickerWindow = window as DirectoryPickerWindow;
+    if (!pickerWindow.showDirectoryPicker) {
+      return null;
+    }
+
+    const options: DirectoryPickerOptions = { mode: 'readwrite' };
     if (startIn) options.startIn = startIn;
-    return await (window as any).showDirectoryPicker(options);
-  } catch (err: any) {
-    if (err.name === 'AbortError') return null;
+    return await pickerWindow.showDirectoryPicker(options);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return null;
     throw err;
   }
 }
@@ -128,14 +146,14 @@ export async function scanDirectoryHandle(
   const currentPath = basePath ? `${basePath}\\${dirHandle.name}` : dirHandle.name;
 
   try {
-    for await (const entry of (dirHandle as any).values()) {
+    for await (const entry of (dirHandle as DirectoryHandleWithValues).values()) {
       if (entry.kind === 'directory') {
         if (EXCLUDED_FOLDERS.has(entry.name)) continue;
-        const subFiles = await scanDirectoryHandle(entry, currentPath, onProgress, maxDepth, currentDepth + 1);
+        const subFiles = await scanDirectoryHandle(entry as FileSystemDirectoryHandle, currentPath, onProgress, maxDepth, currentDepth + 1);
         files.push(...subFiles);
       } else if (entry.kind === 'file') {
         try {
-          const file = await entry.getFile();
+          const file = await (entry as FileSystemFileHandle).getFile();
           const ext = file.name.includes('.') ? '.' + file.name.split('.').pop()!.toLowerCase() : '';
           const typeInfo = getFileTypeInfo(ext);
 

@@ -5,14 +5,16 @@ import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store-context';
 import {
   FolderPlus, Trash2, Play, Folder, Search, AlertCircle, Loader2,
-  FolderOpen, Download, Monitor, FileText, HardDrive
+  FolderOpen, Download, Monitor, FileText
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   isFileSystemAccessSupported, pickDirectory, scanDirectoryHandle,
   computeClientStats, computeClientFolderHash,
+  type ScannedFile,
   type WellKnownDirectory
 } from '@/lib/client-scanner';
+import { registerDirectoryHandle, unregisterDirectoryHandle } from '@/lib/client-file-ops';
 
 export default function Home() {
   const { selectedFolders, addFolder, removeFolder, startScan, scanStatus, scanProgress, error } = useApp();
@@ -40,6 +42,7 @@ export default function Home() {
         if (!selectedFolders.includes(displayName)) {
           addFolder(displayName);
           dirHandlesRef.current.set(displayName, handle);
+          registerDirectoryHandle(displayName, handle);
         }
       }
     } catch (err) {
@@ -50,6 +53,7 @@ export default function Home() {
   const handleRemoveFolder = (folder: string) => {
     removeFolder(folder);
     dirHandlesRef.current.delete(folder);
+    unregisterDirectoryHandle(folder);
   };
 
   const [justScanned, setJustScanned] = useState(false);
@@ -61,7 +65,7 @@ export default function Home() {
     // If we have directory handles, scan client-side
     if (dirHandlesRef.current.size > 0) {
       try {
-        let allFiles: any[] = [];
+        const allFiles: ScannedFile[] = [];
 
         for (const [, handle] of dirHandlesRef.current) {
           const files = await scanDirectoryHandle(handle, '', (count) => {
@@ -78,7 +82,7 @@ export default function Home() {
         const folderHash = computeClientFolderHash(allFiles);
 
         await startScan(false, { files: allFiles, stats, folderHash });
-      } catch (err: any) {
+      } catch (err) {
         console.error('Client-side scan error:', err);
         // The store-context will handle the error state
         await startScan(false, { files: [], stats: { totalFiles: 0, totalSize: 0, byCategory: {}, byType: {}, scannedAt: new Date().toISOString() }, folderHash: '' });

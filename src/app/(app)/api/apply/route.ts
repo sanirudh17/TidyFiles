@@ -5,7 +5,7 @@ import * as path from 'path';
 interface ApplyChange {
   fileId: string;
   originalPath: string;
-  action: 'rename' | 'delete' | 'move';
+  action: 'rename' | 'delete' | 'move' | 'archive' | 'merge';
   proposedName?: string;
   proposedPath?: string;
 }
@@ -138,6 +138,39 @@ export async function POST(request: NextRequest) {
             fs.renameSync(change.originalPath, change.proposedPath);
             result.success = true;
             result.newPath = change.proposedPath;
+            break;
+          }
+
+          case 'archive': {
+            const archivePath = change.proposedPath || path.join(path.dirname(change.originalPath), 'Archives', path.basename(change.originalPath));
+
+            const targetDir = path.dirname(archivePath);
+            if (!fs.existsSync(targetDir)) {
+              fs.mkdirSync(targetDir, { recursive: true });
+            }
+
+            if (fs.existsSync(archivePath)) {
+              result.error = 'Target file already exists';
+              break;
+            }
+
+            if (createBackups) {
+              try {
+                const backupPath = path.join(backupDir, path.basename(change.originalPath));
+                fs.copyFileSync(change.originalPath, backupPath);
+              } catch (e) {
+                console.warn('Backup failed:', e);
+              }
+            }
+
+            fs.renameSync(change.originalPath, archivePath);
+            result.success = true;
+            result.newPath = archivePath;
+            break;
+          }
+
+          case 'merge': {
+            result.error = 'Merge suggestions are not supported yet';
             break;
           }
 

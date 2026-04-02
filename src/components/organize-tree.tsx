@@ -31,6 +31,7 @@ import {
   Info
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { applyFileChanges } from '@/lib/client-file-ops';
 
 // File type icons
 const FILE_ICONS: Record<string, typeof FileText> = {
@@ -118,8 +119,6 @@ export function OrganizeTree({ files, basePath, onApply, onApplyComplete }: Orga
   }, [files, looseFiles, preserveExisting]);
 
   // Track regeneration count to vary results
-  const [regenerationCount, setRegenerationCount] = useState(0);
-
   // Generate AI folder suggestions
   const generateSuggestions = async () => {
     // Clear existing proposals immediately for visual feedback
@@ -128,8 +127,6 @@ export function OrganizeTree({ files, basePath, onApply, onApplyComplete }: Orga
     setError(null);
     setSimulationSummary(null);
     setApplyResult(null);
-    setRegenerationCount(prev => prev + 1);
-    
     try {
       const response = await fetch('/api/organize', {
         method: 'POST',
@@ -183,7 +180,7 @@ export function OrganizeTree({ files, basePath, onApply, onApplyComplete }: Orga
 
     const ts = Date.now();
     const folders: ProposedFolder[] = Object.entries(categoryGroups)
-      .filter(([_, files]) => files.length > 0)
+      .filter(([, groupedFiles]) => groupedFiles.length > 0)
       .map(([category, categoryFiles], index) => ({
         id: `folder-${ts}-${index}`,
         name: category,
@@ -344,17 +341,7 @@ export function OrganizeTree({ files, basePath, onApply, onApplyComplete }: Orga
         onApply(moves);
       }
 
-      // Call the apply API directly to perform file operations
-      const response = await fetch('/api/apply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          changes,
-          createBackups: true,
-        }),
-      });
-
-      const result = await response.json();
+      const result = await applyFileChanges(changes, { createBackups: true });
 
       const errors: string[] = [];
       if (result.results) {

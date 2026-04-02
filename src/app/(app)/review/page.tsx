@@ -40,15 +40,6 @@ function SafetyModal({
   const [createBackup, setCreateBackup] = useState(settings.createBackups);
   const [confirmed, setConfirmed] = useState(false);
   
-  if (!isOpen) return null;
-  
-  const totalSize = [...deletions, ...archives].reduce((sum, f) => sum + f.size, 0);
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-  
   // Group by folder
   const folderGroups = useMemo(() => {
     const groups: Record<string, number> = {};
@@ -58,6 +49,14 @@ function SafetyModal({
     });
     return Object.entries(groups).sort((a, b) => b[1] - a[1]).slice(0, 3);
   }, [deletions, archives]);
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  if (!isOpen) return null;
 
   return createPortal(
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
@@ -197,6 +196,7 @@ export default function ReviewPage() {
   const [isComplete, setIsComplete] = useState(false);
   const [appliedCount, setAppliedCount] = useState(0);
   const [showSafetyModal, setShowSafetyModal] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
 
   // Filter for approved suggestions
   const approvedSuggestions = suggestions.filter(s => s.status === 'approved');
@@ -224,14 +224,25 @@ export default function ReviewPage() {
   const handleApply = async (createBackup: boolean) => {
     setShowSafetyModal(false);
     setIsApplying(true);
+    setApplyError(null);
     setAppliedCount(approvedSuggestions.length);
     
-    // Simulate processing delay then apply
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    await applyChanges();
-    
-    setIsApplying(false);
-    setIsComplete(true);
+    try {
+      // Simulate processing delay then apply
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const result = await applyChanges({ createBackups: createBackup });
+
+      if (result && result.failed > 0) {
+        const firstError = result.results.find(item => !item.success)?.error;
+        throw new Error(firstError || `${result.failed} changes could not be applied.`);
+      }
+
+      setIsComplete(true);
+    } catch (error) {
+      setApplyError(error instanceof Error ? error.message : 'Failed to apply changes');
+    } finally {
+      setIsApplying(false);
+    }
   };
 
   const handleStartNew = () => {
@@ -354,6 +365,13 @@ export default function ReviewPage() {
         </div>
       ) : (
         <div className="space-y-6">
+          {applyError && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
+              <p className="font-medium">Couldn&apos;t apply all changes</p>
+              <p className="mt-1">{applyError}</p>
+            </div>
+          )}
+
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex gap-3 text-amber-800 text-sm">
             <AlertTriangle className="w-5 h-5 shrink-0" />
             <div>
