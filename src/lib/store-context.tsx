@@ -333,6 +333,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const isCacheHit = !forceRescan && cachedFolderHash === preScannedData.folderHash;
         scanData = { ...preScannedData, isCacheHit };
       } else {
+        const browserCanAccessFoldersDirectly =
+          typeof window !== 'undefined' && 'showDirectoryPicker' in window;
+
+        if (browserCanAccessFoldersDirectly && state.selectedFolders.length > 0) {
+          throw new Error('Please re-select your folder from the Scan page before scanning. Saved folder paths alone are not accessible in the deployed web app.');
+        }
+
         // Server-side scan fallback (for local development)
         const scanResponse = await fetch('/api/scan', {
           method: 'POST',
@@ -350,6 +357,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         scanData = await scanResponse.json();
       }
+
+      if (!scanData.files || scanData.files.length === 0) {
+        throw new Error('No files were found to analyze. If you are using the deployed app, re-pick the folder with the browser folder picker first.');
+      }
+
       const { folderHash, isCacheHit } = scanData;
       
       // If cache hit and folder is optimized, skip analysis

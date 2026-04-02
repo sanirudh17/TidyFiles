@@ -6,9 +6,9 @@ import { GEMINI_MODELS } from '@/lib/gemini';
 
 const API_KEY = process.env.GEMINI_API_KEY || '';
 
-const PRIMARY_MODEL = GEMINI_MODELS.PRIMARY;     // gemini-3.1-pro-preview
-const FALLBACK_MODEL = GEMINI_MODELS.FALLBACK;   // gemini-3.1-flash-lite-preview
-const VISION_MODEL = 'gemini-1.5-flash';
+const PRIMARY_MODEL = GEMINI_MODELS.PRIMARY;
+const FALLBACK_MODEL = GEMINI_MODELS.FALLBACK;
+const VISION_MODEL = GEMINI_MODELS.VISION;
 
 // Safe JSON parse with fallback
 function safeJsonParse(text: string, fallback: any = null): any {
@@ -689,7 +689,7 @@ export async function POST(request: NextRequest) {
     const otherFiles = unsuggestedFiles.filter((f: FileInfo) => f.type !== 'image');
     
     // Analyze images with Vision API
-    if (imageFiles.length > 0) {
+    if (imageFiles.length > 0 && API_KEY) {
       try {
         const genAI = new GoogleGenerativeAI(API_KEY);
         const visionModel = genAI.getGenerativeModel({ model: VISION_MODEL });
@@ -785,11 +785,10 @@ Format your response EXACTLY as JSON:
       }
     }
     
-    // Only call text AI if there are unsuggest non-image files
-    if (otherFiles.length > 0) {
+    // Only call text AI if there are unsuggested non-image files and an API key is configured.
+    if (otherFiles.length > 0 && API_KEY) {
       try {
         const genAI = new GoogleGenerativeAI(API_KEY);
-        const model = genAI.getGenerativeModel({ model: PRIMARY_MODEL });
         
         // Prepare file list for AI (limit to prevent token overflow)
         const fileSample = otherFiles.slice(0, 100).map((f: FileInfo) => ({
@@ -847,8 +846,18 @@ Return ONLY a valid JSON array. Example:
 
 If no suggestions needed, return: []`;
 
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text();
+        let responseText = '';
+
+        try {
+          const primaryModel = genAI.getGenerativeModel({ model: PRIMARY_MODEL });
+          const result = await primaryModel.generateContent(prompt);
+          responseText = result.response.text();
+        } catch (primaryError) {
+          console.warn(`[AI] Primary model ${PRIMARY_MODEL} failed, retrying with ${FALLBACK_MODEL}:`, primaryError);
+          const fallbackModel = genAI.getGenerativeModel({ model: FALLBACK_MODEL });
+          const fallbackResult = await fallbackModel.generateContent(prompt);
+          responseText = fallbackResult.response.text();
+        }
         
         // Parse AI response
         try {

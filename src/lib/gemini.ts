@@ -1,8 +1,7 @@
 /**
- * TidyFiles Gemini 3.1 Client (Dual Model)
- * 
- * File operations: gemini-3.1-pro-preview (complex reasoning)
- * Chat: gemini-3.1-flash-lite-preview (fast, reliable)
+ * TidyFiles Gemini client.
+ *
+ * Uses currently supported Gemini model IDs so deployed analysis keeps working.
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -10,13 +9,14 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 const API_KEY = process.env.GEMINI_API_KEY || '';
 
 export const GEMINI_MODELS = {
-  PRIMARY: 'gemini-3.1-pro-preview',
-  FALLBACK: 'gemini-3.1-flash-lite-preview'
+  PRIMARY: 'gemini-2.5-pro',
+  FALLBACK: 'gemini-2.5-flash-lite',
+  VISION: 'gemini-2.5-flash',
 };
 
 const MODELS = {
-  FILE_PRO: 'gemini-3.1-pro-preview',
-  CHAT_FLASH_LITE: 'gemini-3.1-flash-lite-preview'
+  FILE_PRO: GEMINI_MODELS.PRIMARY,
+  CHAT_FLASH_LITE: GEMINI_MODELS.FALLBACK,
 };
 
 interface GeminiResponse {
@@ -62,7 +62,7 @@ export class TidyFilesGemini {
       return `${size.toFixed(1)} ${units[unitIndex]}`;
     };
 
-    const prompt = `TidyFiles AI Chat Assistant (Gemini 3.1 Flash-Lite)
+    const prompt = `TidyFiles AI Chat Assistant (${MODELS.CHAT_FLASH_LITE})
 
 FOLDER: ${context.rootFolder}
 STATS: ${context.totalFiles} files, ${formatSize(context.totalSize)}
@@ -87,7 +87,7 @@ Answer helpfully about these files. Mention specific filenames when relevant. Be
         }
       });
       
-      console.log('[Gemini Chat] Using gemini-3.1-flash-lite-preview');
+      console.log(`[Gemini Chat] Using ${MODELS.CHAT_FLASH_LITE}`);
       const result = await model.generateContent(prompt);
       const text = result.response.text();
       
@@ -115,7 +115,7 @@ Answer helpfully about these files. Mention specific filenames when relevant. Be
       return `${size.toFixed(1)} ${units[unitIndex]}`;
     };
 
-    const prompt = `TidyFiles Export Summary Report (Gemini 3.1 Flash-Lite)
+    const prompt = `TidyFiles Export Summary Report (${MODELS.CHAT_FLASH_LITE})
 
 SCAN RESULTS:
 - ${scanData.totalFiles || 0} files
@@ -197,7 +197,7 @@ RESPOND WITH ONLY VALID JSON:
         },
       });
 
-      console.log('[Gemini Organize] Using gemini-3.1-pro-preview');
+      console.log(`[Gemini Organize] Using ${MODELS.FILE_PRO}`);
       const result = await model.generateContent(prompt);
       const text = result.response.text();
 
@@ -262,7 +262,7 @@ JSON response:
         },
       });
 
-      console.log('[Gemini Analyze] Using gemini-3.1-pro-preview');
+      console.log(`[Gemini Analyze] Using ${MODELS.FILE_PRO}`);
       const result = await model.generateContent(prompt);
       const text = result.response.text();
 
@@ -282,8 +282,8 @@ export const geminiChat = new TidyFilesGemini();
 export const geminiFile = new TidyFilesGemini();
 
 // Deterministic analysis exports
-export const ANALYSIS_MODEL = "gemini-3.1-pro-preview";
-export const VISION_MODEL = "gemini-1.5-flash";
+export const ANALYSIS_MODEL = GEMINI_MODELS.PRIMARY;
+export const VISION_MODEL = GEMINI_MODELS.VISION;
 
 export const ANALYSIS_CONFIG = {
   temperature: 0,

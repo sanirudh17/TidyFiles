@@ -295,15 +295,15 @@ export default function SettingsPage() {
             <div className="pt-3 border-t border-border space-y-2">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">File Operations</span>
-                <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono">gemini-3.1-pro-preview</code>
+                <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono">gemini-2.5-pro</code>
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Chat</span>
-                <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono">gemini-3.1-flash-lite-preview</code>
+                <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono">gemini-2.5-flash-lite</code>
               </div>
             </div>
             <p className="text-xs text-muted-foreground pt-2 border-t border-border">
-              Gemini 3.1 models: Pro for file operations (complex reasoning), Flash-Lite for chat (fast & reliable).
+              Gemini 2.5 models: Pro for file operations (complex reasoning), Flash-Lite for chat (fast and efficient).
             </p>
           </div>
         </section>

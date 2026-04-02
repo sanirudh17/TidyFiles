@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GEMINI_MODELS } from '@/lib/gemini';
 
-const API_KEY = 'AIzaSyBAoC3eK6wX5iyP6vvf9W6O7oTG7MHsveg';
-const genAI = new GoogleGenerativeAI(API_KEY);
+const API_KEY = process.env.GEMINI_API_KEY || '';
+const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;
 
 interface ExportFile {
   name: string;
@@ -49,7 +50,11 @@ function formatDate(date: Date): string {
 
 async function generateAISummary(files: ExportFile[], rootFolder: string): Promise<string> {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-lite-preview' });
+    if (!genAI) {
+      return 'AI summary unavailable.';
+    }
+
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODELS.FALLBACK });
     
     const categories: Record<string, number> = {};
     let totalSize = 0;

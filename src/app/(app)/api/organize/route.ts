@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { geminiFile } from '@/lib/gemini';
 
-const GEMINI_API_KEY = 'AIzaSyBAoC3eK6wX5iyP6vvf9W6O7oTG7MHsveg';
-
 interface FileInfo {
   id: string;
   name: string;
@@ -30,7 +28,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    console.log(`[organize] Analyzing ${files.length} files with Gemini 3.1 Pro`);
+    console.log(`[organize] Analyzing ${files.length} files with Gemini`);
 
     // Use Gemini file operations
     const result = await geminiFile.organizeFiles(files, basePath);
