@@ -20,7 +20,12 @@ export default function Home() {
   const { selectedFolders, addFolder, removeFolder, startScan, scanStatus, scanProgress, error } = useApp();
   const [folderInput, setFolderInput] = useState('');
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
   const browserSupported = isFileSystemAccessSupported();
+  
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Store directory handles for client-side scanning
   const dirHandlesRef = useRef<Map<string, FileSystemDirectoryHandle>>(new Map());
@@ -131,7 +136,7 @@ export default function Home() {
       )}
 
       {/* Browser Compatibility Notice */}
-      {!browserSupported && (
+      {mounted && !browserSupported && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex gap-3 text-amber-800">
           <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
           <div>

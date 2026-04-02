@@ -790,18 +790,25 @@ Format your response EXACTLY as JSON:
       try {
         const genAI = new GoogleGenerativeAI(API_KEY);
         
-        // Prepare file list for AI (limit to prevent token overflow)
-        const fileSample = otherFiles.slice(0, 100).map((f: FileInfo) => ({
-          name: f.name,
-          path: f.path,
-          size: f.size,
-          type: f.type,
-          category: f.category,
-          extension: f.extension,
-          lastModified: new Date(f.lastModified).toISOString(),
-        }));
-        
-        const prompt = `You are an expert file organization assistant. Analyze these files and suggest improvements.
+        // Process files in batches to prevent context token overflow and losing files on large folders
+        const chunkSize = 120;
+        const batches = [];
+        for (let i = 0; i < otherFiles.length; i += chunkSize) {
+          batches.push(otherFiles.slice(i, i + chunkSize));
+        }
+
+        const processBatch = async (batch: FileInfo[]) => {
+          const fileSample = batch.map((f: FileInfo) => ({
+            name: f.name,
+            path: f.path,
+            size: f.size,
+            type: f.type,
+            category: f.category,
+            extension: f.extension,
+            lastModified: new Date(f.lastModified).toISOString(),
+          }));
+          
+          const prompt = `You are an expert file organization assistant. Analyze these files and suggest improvements.
 
 FILES TO ANALYZE:
 ${JSON.stringify(fileSample, null, 2)}
@@ -846,51 +853,59 @@ Return ONLY a valid JSON array. Example:
 
 If no suggestions needed, return: []`;
 
-        let responseText = '';
+          let responseText = '';
 
-        try {
-          const primaryModel = genAI.getGenerativeModel({ model: PRIMARY_MODEL });
-          const result = await primaryModel.generateContent(prompt);
-          responseText = result.response.text();
-        } catch (primaryError) {
-          console.warn(`[AI] Primary model ${PRIMARY_MODEL} failed, retrying with ${FALLBACK_MODEL}:`, primaryError);
-          const fallbackModel = genAI.getGenerativeModel({ model: FALLBACK_MODEL });
-          const fallbackResult = await fallbackModel.generateContent(prompt);
-          responseText = fallbackResult.response.text();
-        }
-        
-        // Parse AI response
-        try {
-          const aiSuggestions = safeJsonParse(responseText, []);
-          
-          if (!aiSuggestions || !Array.isArray(aiSuggestions)) {
-            console.warn('[AI] Failed to parse AI suggestions, got:', responseText.substring(0, 100));
-          } else if (aiSuggestions.length > 0) {
-            for (const aiSug of aiSuggestions) {
-              const originalFile = files.find((f: FileInfo) => f.name === aiSug.fileName);
-              if (!originalFile) continue;
-              
-              // Skip if we already have a suggestion or confidence is too low
-              if (allSuggestions.some(s => s.fileId === originalFile.id)) continue;
-              if (aiSug.confidenceScore && aiSug.confidenceScore < 0.6) continue;
-              
-              allSuggestions.push({
-                id: generateId(),
-                fileId: originalFile.id,
-                originalFile,
-                action: aiSug.action,
-                proposedName: aiSug.proposedName,
-                proposedPath: aiSug.proposedPath,
-                reason: `AI: ${aiSug.reason}`,
-                confidence: aiSug.confidence || 'medium',
-                confidenceScore: aiSug.confidenceScore || confidenceToScore(aiSug.confidence || 'medium'),
-                aiExplanation: aiSug.aiExplanation || aiSug.reason,
-                status: 'pending',
-              });
-            }
+          try {
+            const primaryModel = genAI.getGenerativeModel({ model: PRIMARY_MODEL });
+            const result = await primaryModel.generateContent(prompt);
+            responseText = result.response.text();
+          } catch (primaryError) {
+            console.warn(`[AI] Primary model ${PRIMARY_MODEL} failed, retrying with ${FALLBACK_MODEL}:`, primaryError);
+            const fallbackModel = genAI.getGenerativeModel({ model: FALLBACK_MODEL });
+            const fallbackResult = await fallbackModel.generateContent(prompt);
+            responseText = fallbackResult.response.text();
           }
-        } catch (parseError) {
-          console.warn('Could not parse AI response:', parseError);
+          
+          // Parse AI response
+          try {
+            const aiSuggestions = safeJsonParse(responseText, []);
+            
+            if (!aiSuggestions || !Array.isArray(aiSuggestions)) {
+              console.warn('[AI] Failed to parse AI suggestions for batch');
+            } else if (aiSuggestions.length > 0) {
+              for (const aiSug of aiSuggestions) {
+                const originalFile = files.find((f: FileInfo) => f.name === aiSug.fileName);
+                if (!originalFile) continue;
+                
+                // Skip if we already have a suggestion or confidence is too low
+                if (allSuggestions.some(s => s.fileId === originalFile.id)) continue;
+                if (aiSug.confidenceScore && aiSug.confidenceScore < 0.6) continue;
+                
+                allSuggestions.push({
+                  id: generateId(),
+                  fileId: originalFile.id,
+                  originalFile,
+                  action: aiSug.action,
+                  proposedName: aiSug.proposedName,
+                  proposedPath: aiSug.proposedPath,
+                  reason: `AI: ${aiSug.reason}`,
+                  confidence: aiSug.confidence || 'medium',
+                  confidenceScore: aiSug.confidenceScore || confidenceToScore(aiSug.confidence || 'medium'),
+                  aiExplanation: aiSug.aiExplanation || aiSug.reason,
+                  status: 'pending',
+                });
+              }
+            }
+          } catch (parseError) {
+            console.warn('Could not parse AI response:', parseError);
+          }
+        };
+
+        // Process batches with limited concurrency
+        const CONCURRENCY_LIMIT = 3;
+        for (let i = 0; i < batches.length; i += CONCURRENCY_LIMIT) {
+          const concurrentBatches = batches.slice(i, i + CONCURRENCY_LIMIT);
+          await Promise.all(concurrentBatches.map(b => processBatch(b)));
         }
         
       } catch (aiError) {

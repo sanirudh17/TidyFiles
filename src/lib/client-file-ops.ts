@@ -201,17 +201,29 @@ async function applyChangeInBrowser(change: ApplyChange, createBackups: boolean,
     const targetDir = await resolveDirectory(targetRoot, targetRelativeParts.slice(0, -1), true);
     const targetName = targetRelativeParts[targetRelativeParts.length - 1];
 
-    if (await fileExists(targetDir, targetName)) {
-      result.error = 'Target file already exists';
-      return result;
+    let finalTargetName = targetName;
+    const nameDotIndex = targetName.lastIndexOf('.');
+    const baseName = nameDotIndex !== -1 ? targetName.substring(0, nameDotIndex) : targetName;
+    const extension = nameDotIndex !== -1 ? targetName.substring(nameDotIndex) : '';
+    
+    let counter = 1;
+    while (await fileExists(targetDir, finalTargetName)) {
+      if (counter > 100) {
+        result.error = 'Target file already exists and unable to generate a unique name';
+        return result;
+      }
+      finalTargetName = `${baseName} (${counter})${extension}`;
+      counter++;
     }
 
-    const targetFileHandle = await targetDir.getFileHandle(targetName, { create: true });
+    const targetFileHandle = await targetDir.getFileHandle(finalTargetName, { create: true });
     await writeFile(targetFileHandle, sourceFile);
     await sourceDir.removeEntry(sourceName);
 
     result.success = true;
-    result.newPath = targetPath;
+    const finalTargetPathParts = [...targetRelativeParts];
+    finalTargetPathParts[finalTargetPathParts.length - 1] = finalTargetName;
+    result.newPath = [targetRoot, ...finalTargetPathParts].join('\\');
     return result;
   } catch (error) {
     result.error = error instanceof Error ? error.message : 'Unknown error';
@@ -261,13 +273,23 @@ export async function applyClientSideChanges(
 ): Promise<ApplyResponse> {
   const createBackups = options.createBackups ?? true;
   const backupSessionId = new Date().toISOString().replace(/[:.]/g, '-');
-  const results: ApplyResult[] = [];
+  
+  const concurrencyLimit = 10; // Process 10 operations concurrently
+  const results: ApplyResult[] = new Array(changes.length);
+  let currentIndex = 0;
 
-  for (const change of changes) {
-    results.push(await applyChangeInBrowser(change, createBackups, backupSessionId));
-  }
+  const workers = Array(concurrencyLimit)
+    .fill(null)
+    .map(async () => {
+      while (currentIndex < changes.length) {
+        const index = currentIndex++;
+        results[index] = await applyChangeInBrowser(changes[index], createBackups, backupSessionId);
+      }
+    });
 
-  const applied = results.filter((result) => result.success).length;
+  await Promise.all(workers);
+
+  const applied = results.filter((result) => result?.success).length;
   const failed = results.length - applied;
 
   return {
@@ -291,19 +313,44 @@ export async function applyFileChanges(
     throw new Error('Folder access has expired. Please go back to Scan Setup and re-select the folder before applying changes.');
   }
 
-  const response = await fetch('/api/apply', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      changes,
-      createBackups: options.createBackups ?? true,
-    }),
-  });
+  // Chunking API requests to avoid Vercel Serverless Function timeouts on large batches
+  const CHUNK_SIZE = 50;
+  const allResults: ApplyResult[] = [];
+  let combinedBackupLocation: string | null = null;
+  
+  for (let i = 0; i < changes.length; i += CHUNK_SIZE) {
+    const chunk = changes.slice(i, i + CHUNK_SIZE);
 
-  const result = await response.json();
-  if (!response.ok) {
-    throw new Error(result?.details || result?.error || 'Failed to apply changes');
+    const response = await fetch('/api/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        changes: chunk,
+        createBackups: options.createBackups ?? true,
+      }),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result?.details || result?.error || 'Failed to apply changes chunk');
+    }
+    
+    if (result.results) {
+      allResults.push(...result.results);
+    }
+    if (result.backupLocation) {
+      combinedBackupLocation = result.backupLocation; // Grab whichever backup location comes back
+    }
   }
 
-  return result as ApplyResponse;
+  const applied = allResults.filter(r => r.success).length;
+  const failed = allResults.length - applied;
+
+  return {
+    success: failed === 0,
+    applied,
+    failed,
+    results: allResults,
+    backupLocation: combinedBackupLocation
+  };
 }

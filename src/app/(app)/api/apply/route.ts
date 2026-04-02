@@ -63,13 +63,19 @@ export async function POST(request: NextRequest) {
             }
             
             const dir = path.dirname(change.originalPath);
-            const newPath = path.join(dir, change.proposedName);
+            let newPath = path.join(dir, change.proposedName);
             
-            // Check if target already exists
-            if (fs.existsSync(newPath)) {
-              result.error = 'Target file already exists';
-              break;
+            let counter = 1;
+            while (fs.existsSync(newPath)) {
+              if (counter > 100) {
+                result.error = 'Target file already exists and could not fix name collision';
+                break;
+              }
+              const parsed = path.parse(change.proposedName!);
+              newPath = path.join(dir, `${parsed.name} (${counter})${parsed.ext}`);
+              counter++;
             }
+            if (result.error) break;
 
             // Create backup if enabled
             if (createBackups) {
@@ -118,11 +124,21 @@ export async function POST(request: NextRequest) {
               fs.mkdirSync(targetDir, { recursive: true });
             }
 
-            // Check if target already exists
-            if (fs.existsSync(change.proposedPath)) {
-              result.error = 'Target file already exists';
-              break;
+            // Handle target existing by appending (1), (2), etc.
+            let finalTargetPath = change.proposedPath;
+            let moveCounter = 1;
+            while (fs.existsSync(finalTargetPath)) {
+              if (moveCounter > 100) {
+                result.error = 'Target file already exists and could not fix name collision';
+                break;
+              }
+              const parsed = path.parse(change.proposedPath!);
+              finalTargetPath = path.join(parsed.dir, `${parsed.name} (${moveCounter})${parsed.ext}`);
+              moveCounter++;
             }
+            if (result.error) break;
+            
+            change.proposedPath = finalTargetPath;
 
             // Create backup if enabled
             if (createBackups) {
