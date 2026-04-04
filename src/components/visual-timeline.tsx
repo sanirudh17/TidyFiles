@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Calendar, 
@@ -22,8 +22,9 @@ import {
   endOfWeek,
   addMonths,
   subMonths,
-  getDay,
-  parseISO
+  parseISO,
+  setMonth,
+  setYear
 } from 'date-fns';
 import { cn } from '@/lib/utils';
 import type { ScannedFile } from '@/lib/store-context';
@@ -43,9 +44,143 @@ function formatSize(bytes: number): string {
   return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
 
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+const MONTH_SHORT = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+// Month/Year picker popup component
+function MonthYearPicker({ 
+  currentMonth, 
+  onMonthChange, 
+  onClose 
+}: { 
+  currentMonth: Date; 
+  onMonthChange: (date: Date) => void; 
+  onClose: () => void;
+}) {
+  const [pickerYear, setPickerYear] = useState(currentMonth.getFullYear());
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const currentMonthIndex = currentMonth.getMonth();
+  const currentYear = currentMonth.getFullYear();
+  const thisYear = new Date().getFullYear();
+  const thisMonth = new Date().getMonth();
+
+  // Close on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [onClose]);
+
+  const handleMonthSelect = (monthIndex: number) => {
+    const newDate = setMonth(setYear(currentMonth, pickerYear), monthIndex);
+    onMonthChange(newDate);
+    onClose();
+  };
+
+  // Year range: 5 years back to current year + 1
+  const yearStart = thisYear - 5;
+  const yearEnd = thisYear + 1;
+  const years = Array.from({ length: yearEnd - yearStart + 1 }, (_, i) => yearStart + i);
+
+  return (
+    <div 
+      ref={popoverRef}
+      className="absolute left-0 top-full mt-2 z-50 bg-white border border-border rounded-xl shadow-lg animate-in fade-in zoom-in-95 duration-150 w-[300px]"
+      style={{ boxShadow: '0 12px 32px rgba(15, 23, 42, 0.15)' }}
+    >
+      {/* Year navigation */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <button
+          onClick={() => setPickerYear(y => y - 1)}
+          disabled={pickerYear <= yearStart}
+          className="p-1. hover:bg-muted rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <select
+          value={pickerYear}
+          onChange={(e) => setPickerYear(Number(e.target.value))}
+          className="text-sm font-semibold bg-transparent border-none focus:outline-none cursor-pointer text-center appearance-none px-2"
+        >
+          {years.map(y => (
+            <option key={y} value={y}>{y}</option>
+          ))}
+        </select>
+        <button
+          onClick={() => setPickerYear(y => y + 1)}
+          disabled={pickerYear >= yearEnd}
+          className="p-1.5 hover:bg-muted rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Month grid */}
+      <div className="grid grid-cols-3 gap-1.5 p-3">
+        {MONTH_SHORT.map((month, index) => {
+          const isSelected = pickerYear === currentYear && index === currentMonthIndex;
+          const isCurrentMonth = pickerYear === thisYear && index === thisMonth;
+          const isFuture = pickerYear > thisYear || (pickerYear === thisYear && index > thisMonth);
+
+          return (
+            <button
+              key={month}
+              onClick={() => handleMonthSelect(index)}
+              className={cn(
+                "px-3 py-2.5 text-sm font-medium rounded-lg transition-all duration-150",
+                isSelected
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : isCurrentMonth
+                    ? "bg-primary/10 text-primary ring-1 ring-primary/30"
+                    : isFuture
+                      ? "text-muted-foreground/40 hover:bg-muted/50"
+                      : "text-foreground hover:bg-muted"
+              )}
+            >
+              {month}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Quick actions */}
+      <div className="px-3 pb-3 flex gap-2">
+        <button
+          onClick={() => {
+            onMonthChange(new Date());
+            onClose();
+          }}
+          className="flex-1 px-3 py-1.5 text-xs font-medium bg-muted hover:bg-muted/80 rounded-lg transition-colors text-center"
+        >
+          Go to Today
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function VisualTimeline({ files }: TimelineProps) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
 
   // Group files by date
   const filesByDate = useMemo(() => {
@@ -87,39 +222,33 @@ export function VisualTimeline({ files }: TimelineProps) {
   }, [filesByDate]);
 
   // Get heat color based on file count using dynamic min-max normalization
-  // Enhanced with better contrast and HSL-based colors
   const getHeatColor = (count: number): string => {
     if (count === 0) return 'bg-gray-100';
     
-    // Use log scale for better distribution when there's high variance
     const logMin = minFilesPerDay > 0 ? Math.log(minFilesPerDay) : 0;
     const logMax = maxFilesPerDay > 0 ? Math.log(maxFilesPerDay) : 0;
     const logCount = count > 0 ? Math.log(count) : 0;
     
-    // Normalize using log scale for better contrast
     const range = logMax - logMin;
     const intensity = range > 0 ? (logCount - logMin) / range : 0.5;
     
-    // Use 5-level discrete scale for clear visual distinction
-    if (intensity >= 0.85) return 'bg-blue-700'; // Darkest
+    if (intensity >= 0.85) return 'bg-blue-700';
     if (intensity >= 0.65) return 'bg-blue-500'; 
     if (intensity >= 0.40) return 'bg-blue-400';
     if (intensity >= 0.20) return 'bg-blue-300';
-    return 'bg-blue-200'; // Lightest (but still blue, not gray)
+    return 'bg-blue-200';
   };
 
   // Get text color based on background intensity
   const getTextColor = (count: number): string => {
     if (count === 0) return 'text-gray-400';
     
-    // Use same log scale calculation
     const logMin = minFilesPerDay > 0 ? Math.log(minFilesPerDay) : 0;
     const logMax = maxFilesPerDay > 0 ? Math.log(maxFilesPerDay) : 0;
     const logCount = count > 0 ? Math.log(count) : 0;
     const range = logMax - logMin;
     const intensity = range > 0 ? (logCount - logMin) / range : 0.5;
     
-    // White text on darker backgrounds
     return intensity >= 0.40 ? 'text-white' : 'text-gray-700';
   };
 
@@ -171,11 +300,26 @@ export function VisualTimeline({ files }: TimelineProps) {
     <div className="space-y-6">
       {/* Header with month navigation */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Calendar className="w-5 h-5 text-primary" />
-          <h3 className="text-lg font-semibold">
-            {format(currentMonth, 'MMMM yyyy')}
-          </h3>
+        <div className="relative flex items-center gap-3">
+          <button 
+            onClick={() => setShowMonthPicker(!showMonthPicker)}
+            className="flex items-center gap-2 hover:bg-muted px-2 py-1.5 rounded-lg transition-colors cursor-pointer group"
+            title="Click to pick month & year"
+          >
+            <Calendar className="w-5 h-5 text-primary group-hover:text-primary/80 transition-colors" />
+            <h3 className="text-lg font-semibold group-hover:text-foreground/80 transition-colors">
+              {format(currentMonth, 'MMMM yyyy')}
+            </h3>
+          </button>
+          
+          {/* Month/Year Picker Popover */}
+          {showMonthPicker && (
+            <MonthYearPicker 
+              currentMonth={currentMonth}
+              onMonthChange={setCurrentMonth}
+              onClose={() => setShowMonthPicker(false)}
+            />
+          )}
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -246,7 +390,7 @@ export function VisualTimeline({ files }: TimelineProps) {
 
         {/* Calendar days */}
         <div className="grid grid-cols-7 gap-1">
-          {calendarDays.map((day, index) => {
+          {calendarDays.map((day) => {
             const dateKey = format(day, 'yyyy-MM-dd');
             const dayFiles = filesByDate.get(dateKey) || [];
             const isCurrentMonth = isSameMonth(day, currentMonth);
@@ -375,7 +519,7 @@ export function VisualTimeline({ files }: TimelineProps) {
         <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/30 rounded-lg p-3">
           <TrendingUp className="w-4 h-4" />
           <span>
-            Click on any day with files to see details. Days with more activity appear darker.
+            Click on any day with files to see details. Click the month/year to jump to any date.
           </span>
         </div>
       )}

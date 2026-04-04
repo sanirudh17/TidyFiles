@@ -2,7 +2,7 @@
 
 import { useApp } from '@/lib/store-context';
 import { useRouter } from 'next/navigation';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { 
   FileText, 
   Image as ImageIcon, 
@@ -24,7 +24,6 @@ import {
   Search,
   CheckCircle,
   Filter,
-  ChevronRight,
   Calendar,
   FolderTree
 } from 'lucide-react';
@@ -193,7 +192,6 @@ function FileDrawer({
                           {file.path}
                         </p>
                       </div>
-                      <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-1" />
                     </div>
                     <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
                       <span>{formatSize(file.size)}</span>
@@ -222,6 +220,11 @@ export default function ResultsPage() {
   const router = useRouter();
   const [selectedCategory, setSelectedCategory] = useState<{ name: string; icon: typeof FileText; color: string; bg: string; gradient: string; count: number; size: number } | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'timeline' | 'organize'>('overview');
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Show a friendly message if no scan data, but don't redirect
   if (scanStatus !== 'complete' || !stats) {
@@ -232,7 +235,7 @@ export default function ResultsPage() {
           <h3 className="text-lg font-medium mb-2">No scan data available</h3>
           <p className="text-muted-foreground text-sm mb-4">Run a scan to see your file analysis here.</p>
           <button 
-            onClick={() => router.push('/')} 
+            onClick={() => router.push('/scan')} 
             className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90"
           >
             Go to Scan Setup
@@ -555,7 +558,7 @@ export default function ResultsPage() {
       {/* Scanned At */}
       {stats.scannedAt && (
         <p className="text-xs text-muted-foreground text-center">
-          Scanned at {new Date(stats.scannedAt).toLocaleString()}
+          Scanned at {mounted ? new Date(stats.scannedAt).toLocaleString() : 'recently'}
         </p>
       )}
     </div>

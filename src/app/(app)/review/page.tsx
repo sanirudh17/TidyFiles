@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useApp } from '@/lib/store-context';
 import { useRouter } from 'next/navigation';
@@ -28,7 +28,8 @@ function SafetyModal({
   onConfirm, 
   deletions,
   archives,
-  settings
+  settings,
+  totalApproved
 }: { 
   isOpen: boolean; 
   onClose: () => void; 
@@ -36,10 +37,17 @@ function SafetyModal({
   deletions: Array<{ name: string; path: string; size: number }>;
   archives: Array<{ name: string; path: string; size: number }>;
   settings: { createBackups: boolean };
+  totalApproved: number;
 }) {
   const [createBackup, setCreateBackup] = useState(settings.createBackups);
   const [confirmed, setConfirmed] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
   
+  const hasDestructive = deletions.length > 0 || archives.length > 0;
+  const totalCount = totalApproved;
+
   // Group by folder
   const folderGroups = useMemo(() => {
     const groups: Record<string, number> = {};
@@ -56,7 +64,7 @@ function SafetyModal({
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  if (!isOpen) return null;
+  if (!isOpen || !mounted) return null;
 
   return createPortal(
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
@@ -65,13 +73,13 @@ function SafetyModal({
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-100 rounded-full">
-              <AlertTriangle className="w-5 h-5 text-amber-600" />
+            <div className={cn("p-2 rounded-full", hasDestructive ? "bg-amber-100" : "bg-blue-100")}>
+              {hasDestructive ? <AlertTriangle className="w-5 h-5 text-amber-600" /> : <Shield className="w-5 h-5 text-blue-600" />}
             </div>
             <div>
-              <h3 className="font-semibold">Confirm Destructive Actions</h3>
+              <h3 className="font-semibold">{hasDestructive ? 'Confirm Changes' : 'Apply Changes'}</h3>
               <p className="text-sm text-muted-foreground">
-                {deletions.length + archives.length} files will be modified
+                {totalCount} file{totalCount !== 1 ? 's' : ''} will be modified
               </p>
             </div>
           </div>
@@ -83,43 +91,47 @@ function SafetyModal({
         {/* Content */}
         <div className="p-4 space-y-4">
           {/* Summary */}
-          <div className="grid grid-cols-2 gap-3">
-            {deletions.length > 0 && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                <div className="flex items-center gap-2 text-red-700 mb-1">
-                  <Trash2 className="w-4 h-4" />
-                  <span className="font-medium text-sm">Delete</span>
+          {hasDestructive && (
+            <div className="grid grid-cols-2 gap-3">
+              {deletions.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-red-700 mb-1">
+                    <Trash2 className="w-4 h-4" />
+                    <span className="font-medium text-sm">Delete</span>
+                  </div>
+                  <p className="text-xl font-bold text-red-900">{deletions.length} files</p>
+                  <p className="text-xs text-red-600">{formatSize(deletions.reduce((s, f) => s + f.size, 0))}</p>
                 </div>
-                <p className="text-xl font-bold text-red-900">{deletions.length} files</p>
-                <p className="text-xs text-red-600">{formatSize(deletions.reduce((s, f) => s + f.size, 0))}</p>
-              </div>
-            )}
-            {archives.length > 0 && (
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                <div className="flex items-center gap-2 text-gray-700 mb-1">
-                  <Archive className="w-4 h-4" />
-                  <span className="font-medium text-sm">Archive</span>
+              )}
+              {archives.length > 0 && (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-gray-700 mb-1">
+                    <Archive className="w-4 h-4" />
+                    <span className="font-medium text-sm">Archive</span>
+                  </div>
+                  <p className="text-xl font-bold text-gray-900">{archives.length} files</p>
+                  <p className="text-xs text-gray-600">{formatSize(archives.reduce((s, f) => s + f.size, 0))}</p>
                 </div>
-                <p className="text-xl font-bold text-gray-900">{archives.length} files</p>
-                <p className="text-xs text-gray-600">{formatSize(archives.reduce((s, f) => s + f.size, 0))}</p>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
           
           {/* Folder breakdown */}
-          <div className="bg-muted/50 rounded-lg p-3">
-            <p className="text-xs font-medium text-muted-foreground mb-2">From folders:</p>
-            <div className="flex flex-wrap gap-2">
-              {folderGroups.map(([folder, count]) => (
-                <span key={folder} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-border rounded text-xs">
-                  <Folder className="w-3 h-3 text-muted-foreground" />
-                  {folder} ({count})
-                </span>
-              ))}
+          {folderGroups.length > 0 && (
+            <div className="bg-muted/50 rounded-lg p-3">
+              <p className="text-xs font-medium text-muted-foreground mb-2">From folders:</p>
+              <div className="flex flex-wrap gap-2">
+                {folderGroups.map(([folder, count]) => (
+                  <span key={folder} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-border rounded text-xs">
+                    <Folder className="w-3 h-3 text-muted-foreground" />
+                    {folder} ({count})
+                  </span>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
           
-          {/* Backup option */}
+          {/* Backup option — always shown */}
           <label className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg cursor-pointer">
             <input
               type="checkbox"
@@ -128,8 +140,8 @@ function SafetyModal({
               className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
             />
             <div>
-              <p className="text-sm font-medium text-blue-900">Create backup before deleting</p>
-              <p className="text-xs text-blue-700">Files will be archived to a backup folder first</p>
+              <p className="text-sm font-medium text-blue-900">Create backups before applying</p>
+              <p className="text-xs text-blue-700">Original files will be copied to a single &quot;TidyFiles Backups&quot; folder first</p>
             </div>
           </label>
           
@@ -146,19 +158,26 @@ function SafetyModal({
             </div>
           )}
           
-          {/* Confirmation checkbox */}
-          <label className="flex items-start gap-3 p-3 border border-amber-300 bg-amber-50 rounded-lg cursor-pointer">
-            <input
-              type="checkbox"
-              checked={confirmed}
-              onChange={(e) => setConfirmed(e.target.checked)}
-              className="w-4 h-4 mt-0.5 text-amber-600 border-gray-300 rounded focus:ring-amber-500"
-            />
-            <div>
-              <p className="text-sm font-medium text-amber-900">I understand these changes cannot be undone</p>
-              <p className="text-xs text-amber-700">Deleted files may not be recoverable without backups</p>
+          {/* Confirmation checkbox — only for destructive actions */}
+          {hasDestructive ? (
+            <label className="flex items-start gap-3 p-3 border border-amber-300 bg-amber-50 rounded-lg cursor-pointer">
+              <input
+                type="checkbox"
+                checked={confirmed}
+                onChange={(e) => setConfirmed(e.target.checked)}
+                className="w-4 h-4 mt-0.5 text-amber-600 border-gray-300 rounded focus:ring-amber-500"
+              />
+              <div>
+                <p className="text-sm font-medium text-amber-900">I understand these changes modify files on disk</p>
+                <p className="text-xs text-amber-700">Deleted files may not be recoverable without backups</p>
+              </div>
+            </label>
+          ) : (
+            <div className="bg-green-50/50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
+              <p className="font-medium">These are non-destructive changes (renames/moves only).</p>
+              <p className="text-xs text-green-700 mt-1">Your files will be renamed but no data will be deleted.</p>
             </div>
-          </label>
+          )}
         </div>
         
         {/* Footer */}
@@ -171,16 +190,18 @@ function SafetyModal({
           </button>
           <button
             onClick={() => onConfirm(createBackup)}
-            disabled={!confirmed}
+            disabled={hasDestructive && !confirmed}
             className={cn(
               "px-4 py-2 text-sm font-medium rounded-lg transition-colors flex items-center gap-2",
-              confirmed
+              (hasDestructive && !confirmed)
+                ? "bg-muted text-muted-foreground cursor-not-allowed"
+                : hasDestructive
                 ? "bg-red-600 text-white hover:bg-red-700"
-                : "bg-muted text-muted-foreground cursor-not-allowed"
+                : "bg-primary text-primary-foreground hover:bg-primary/90"
             )}
           >
             <Shield className="w-4 h-4" />
-            Confirm & Apply
+            {hasDestructive ? 'Confirm & Apply' : 'Apply Changes'}
           </button>
         </div>
       </div>
@@ -213,12 +234,8 @@ export default function ReviewPage() {
   const hasDestructiveActions = deletions.length > 0 || archives.length > 0;
 
   const handleApplyClick = () => {
-    // Show safety modal if there are deletions or archives
-    if (hasDestructiveActions && settings.requireConfirmation) {
-      setShowSafetyModal(true);
-    } else {
-      handleApply(settings.createBackups);
-    }
+    // Always show the confirmation modal so users can choose backup option
+    setShowSafetyModal(true);
   };
 
   const handleApply = async (createBackup: boolean) => {
@@ -247,7 +264,7 @@ export default function ReviewPage() {
 
   const handleStartNew = () => {
     resetScan();
-    router.push('/');
+    router.push('/scan');
   };
 
   // Show friendly message if no scan, but don't redirect
@@ -259,7 +276,7 @@ export default function ReviewPage() {
           <h3 className="text-lg font-medium mb-2">Nothing to review</h3>
           <p className="text-muted-foreground text-sm mb-4">Approve suggestions first, then come here to apply changes.</p>
           <button 
-            onClick={() => router.push('/')} 
+            onClick={() => router.push('/scan')} 
             className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90"
           >
             Go to Scan Setup
@@ -351,6 +368,7 @@ export default function ReviewPage() {
         deletions={deletions}
         archives={archives}
         settings={settings}
+        totalApproved={approvedSuggestions.length}
       />
 
       {approvedSuggestions.length === 0 ? (

@@ -113,32 +113,31 @@ export async function POST(request: NextRequest) {
           }
 
           case 'move': {
-            if (!change.proposedPath) {
-              result.error = 'No proposed path provided';
-              break;
+            let movePath = change.proposedPath;
+            if (!movePath) {
+              // Fallback: move into an 'Organized' subfolder
+              movePath = path.join(path.dirname(change.originalPath), 'Organized', path.basename(change.originalPath));
             }
 
             // Ensure target directory exists
-            const targetDir = path.dirname(change.proposedPath);
+            const targetDir = path.dirname(movePath);
             if (!fs.existsSync(targetDir)) {
               fs.mkdirSync(targetDir, { recursive: true });
             }
 
             // Handle target existing by appending (1), (2), etc.
-            let finalTargetPath = change.proposedPath;
+            let finalTargetPath = movePath;
             let moveCounter = 1;
             while (fs.existsSync(finalTargetPath)) {
               if (moveCounter > 100) {
                 result.error = 'Target file already exists and could not fix name collision';
                 break;
               }
-              const parsed = path.parse(change.proposedPath!);
+              const parsed = path.parse(movePath);
               finalTargetPath = path.join(parsed.dir, `${parsed.name} (${moveCounter})${parsed.ext}`);
               moveCounter++;
             }
             if (result.error) break;
-            
-            change.proposedPath = finalTargetPath;
 
             // Create backup if enabled
             if (createBackups) {
@@ -151,9 +150,9 @@ export async function POST(request: NextRequest) {
             }
 
             // Perform move
-            fs.renameSync(change.originalPath, change.proposedPath);
+            fs.renameSync(change.originalPath, finalTargetPath);
             result.success = true;
-            result.newPath = change.proposedPath;
+            result.newPath = finalTargetPath;
             break;
           }
 

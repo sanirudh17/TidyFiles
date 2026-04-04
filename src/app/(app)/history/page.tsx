@@ -2,6 +2,7 @@
 
 import { useApp } from '@/lib/store-context';
 import { useState, useEffect, useCallback } from 'react';
+import { checkUndoSafetyClientSide, performUndoClientSide, canUndoClientSide } from '@/lib/client-file-ops';
 import { 
   History, 
   RotateCcw, 
@@ -226,42 +227,54 @@ function PartialUndoModal({
 }
 
 export default function HistoryPage() {
-  const { history } = useApp();
+  const { history, recordUndoResult, clearHistory } = useApp();
   const [safetyChecks, setSafetyChecks] = useState<Record<string, UndoCheckResult>>({});
   const [loadingChecks, setLoadingChecks] = useState<Set<string>>(new Set());
   const [undoingIds, setUndoingIds] = useState<Set<string>>(new Set());
   const [partialUndoModal, setPartialUndoModal] = useState<{ isOpen: boolean; entryId: string | null }>({ isOpen: false, entryId: null });
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
-    const distance = formatDistanceToNow(date, { addSuffix: true });
     return {
-      relative: distance,
-      absolute: format(date, 'MMM d, yyyy h:mm a')
+      relative: mounted ? formatDistanceToNow(date, { addSuffix: true }) : 'Recently',
+      absolute: mounted ? format(date, 'MMM d, yyyy h:mm a') : date.toISOString()
     };
   };
 
-  const checkUndoSafety = useCallback(async (entryId: string) => {
-    const entry = history.find(h => h.id === entryId);
+  const checkUndoSafety = useCallback(async (
+    entryId: string,
+    entryOverride?: typeof history[number]
+  ) => {
+    const entry = entryOverride ?? history.find(h => h.id === entryId);
     if (!entry) return;
 
     setLoadingChecks(prev => new Set(prev).add(entryId));
 
     try {
-      const response = await fetch('/api/undo-check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          historyEntryId: entryId,
-          rootFolder: entry.rootFolder,
-          snapshotHashAfter: entry.snapshotHashAfter,
-          changes: entry.changes,
-        }),
-      });
+      // Use client-side check if directory handles are available (browser-based scans)
+      if (canUndoClientSide(entry.changes)) {
+        const result = await checkUndoSafetyClientSide(entry.changes);
+        setSafetyChecks(prev => ({ ...prev, [entryId]: { historyEntryId: entryId, ...result } }));
+      } else {
+        // Fallback to server API for server-scanned folders
+        const response = await fetch('/api/undo-check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            historyEntryId: entryId,
+            rootFolder: entry.rootFolder,
+            snapshotHashAfter: entry.snapshotHashAfter,
+            changes: entry.changes,
+          }),
+        });
 
-      if (response.ok) {
-        const result: UndoCheckResult = await response.json();
-        setSafetyChecks(prev => ({ ...prev, [entryId]: result }));
+        if (response.ok) {
+          const result: UndoCheckResult = await response.json();
+          setSafetyChecks(prev => ({ ...prev, [entryId]: result }));
+        }
       }
     } catch (error) {
       console.error('Failed to check undo safety:', error);
@@ -294,20 +307,56 @@ export default function HistoryPage() {
     setUndoingIds(prev => new Set(prev).add(entryId));
 
     try {
-      const response = await fetch('/api/undo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          changes: changesToUndo,
-          partial,
-        }),
-      });
+      let undoResult:
+        | {
+            success: boolean;
+            undone: number;
+            failed: number;
+            results: Array<{ success: boolean; fileId: string; action: string; error?: string }>;
+          }
+        | undefined;
 
-      if (response.ok) {
+      if (canUndoClientSide(changesToUndo)) {
+        // Client-side undo
+        undoResult = await performUndoClientSide(changesToUndo);
+      } else {
+        // Server-side undo
+        const response = await fetch('/api/undo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ changes: changesToUndo, partial }),
+        });
+
         const result = await response.json();
-        // Refresh safety check after undo
-        await checkUndoSafety(entryId);
-        // TODO: Update history entry status to 'Undone' in store
+
+        if (!response.ok) {
+          throw new Error(result?.details || result?.error || 'Failed to undo changes');
+        }
+
+        undoResult = result;
+      }
+
+      if (!undoResult) {
+        return;
+      }
+
+      const successfulFileIds = new Set(
+        undoResult.results.filter(result => result.success).map(result => result.fileId)
+      );
+      const remainingChanges = entry.changes.filter(change => !successfulFileIds.has(change.fileId));
+
+      if (successfulFileIds.size > 0) {
+        recordUndoResult(entryId, undoResult);
+      }
+
+      if (remainingChanges.length > 0) {
+        await checkUndoSafety(entryId, { ...entry, changes: remainingChanges });
+      } else {
+        setSafetyChecks(prev => {
+          const next = { ...prev };
+          delete next[entryId];
+          return next;
+        });
       }
     } catch (error) {
       console.error('Failed to undo:', error);
@@ -319,7 +368,7 @@ export default function HistoryPage() {
       });
       setPartialUndoModal({ isOpen: false, entryId: null });
     }
-  }, [history, safetyChecks, checkUndoSafety]);
+  }, [history, safetyChecks, checkUndoSafety, recordUndoResult]);
 
   const handleUndoClick = (entryId: string) => {
     const safety = safetyChecks[entryId];
@@ -477,7 +526,10 @@ export default function HistoryPage() {
 
       {history.length > 0 && (
         <div className="flex justify-end">
-          <button className="text-sm text-muted-foreground hover:text-destructive flex items-center gap-2 px-3 py-1.5 rounded hover:bg-red-50 transition-colors">
+          <button
+            onClick={clearHistory}
+            className="text-sm text-muted-foreground hover:text-destructive flex items-center gap-2 px-3 py-1.5 rounded hover:bg-red-50 transition-colors"
+          >
             <Trash2 className="w-4 h-4" />
             Clear History
           </button>

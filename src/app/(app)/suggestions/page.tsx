@@ -477,7 +477,7 @@ export default function SuggestionsPage() {
           <h3 className="text-lg font-medium mb-2">No suggestions yet</h3>
           <p className="text-muted-foreground text-sm mb-4">Run a scan to get AI-powered suggestions for your files.</p>
           <button 
-            onClick={() => router.push('/')} 
+            onClick={() => router.push('/scan')} 
             className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90"
           >
             Go to Scan Setup

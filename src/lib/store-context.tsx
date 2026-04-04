@@ -78,7 +78,7 @@ export interface FileAction {
   fileId: string;
 }
 
-interface HistoryEntry {
+export interface HistoryEntry {
   id: string;
   date: string;
   action: string;
@@ -126,10 +126,12 @@ interface AppContextType extends AppState {
   approveAll: () => void;
   rejectAll: () => void;
   applyChanges: (options?: { createBackups?: boolean }) => Promise<ApplyResponse | undefined>;
+  recordUndoResult: (entryId: string, result: { undone: number; failed: number; results: Array<{ success: boolean; fileId: string; error?: string }> }) => void;
   updateSettings: (settings: Partial<AppSettings>) => void;
   resetScan: () => void;
   markAsOptimized: () => void;
   clearCache: () => void;
+  clearHistory: () => void;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -501,37 +503,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const result = await applyFileChanges(changes, {
         createBackups: options?.createBackups ?? state.settings.createBackups,
       });
+      const successfulResults = result.results.filter(item => item.success);
+      const succeededKeys = new Set(
+        successfulResults.map((item) => `${item.fileId}:${item.action}:${item.originalPath}`)
+      );
+      const appliedSuggestions = approvedSuggestions.filter((suggestion) => succeededKeys.has(suggestionKey(suggestion)));
+      const failedApprovedSuggestions = approvedSuggestions.filter((suggestion) => !succeededKeys.has(suggestionKey(suggestion)));
+      const appliedCounts = {
+        rename: appliedSuggestions.filter(s => s.action === 'rename').length,
+        delete: appliedSuggestions.filter(s => s.action === 'delete').length,
+        move: appliedSuggestions.filter(s => s.action === 'move').length,
+        archive: appliedSuggestions.filter(s => s.action === 'archive').length,
+      };
 
       // Create history entry with actual results including original/new names for diff
       const historyEntry: HistoryEntry = {
         id: Math.random().toString(36).substring(2, 15),
         date: new Date().toISOString(),
-        action: `Applied ${result.applied || 0} changes`,
-        details: `${approvedSuggestions.filter(s => s.action === 'rename').length} renames, ${approvedSuggestions.filter(s => s.action === 'delete').length} deletes, ${approvedSuggestions.filter(s => s.action === 'move').length} moves, ${approvedSuggestions.filter(s => s.action === 'archive').length} archives`,
-        status: result.success ? 'Success' : (result.applied > 0 ? 'Success' : 'Failed'),
+        action: result.failed > 0 && appliedSuggestions.length > 0
+          ? `Applied ${appliedSuggestions.length} of ${approvedSuggestions.length} changes`
+          : appliedSuggestions.length > 0
+          ? `Applied ${appliedSuggestions.length} changes`
+          : `Failed to apply ${approvedSuggestions.length} changes`,
+        details: `${appliedCounts.rename} renames, ${appliedCounts.delete} deletes, ${appliedCounts.move} moves, ${appliedCounts.archive} archives`,
+        status: appliedSuggestions.length > 0 ? 'Success' : 'Failed',
         rootFolder: state.selectedFolders[0] || '',
         snapshotHashBefore: state.folderHash || '',
         snapshotHashAfter: result.newFolderHash || state.folderHash || '', // Will be computed by apply API
-        changes: approvedSuggestions.map(s => ({
-          fileId: s.fileId,
-          originalPath: s.originalFile.path,
-          originalName: s.originalFile.name,
-          newPath: s.proposedPath || (s.proposedName ? s.originalFile.path.replace(s.originalFile.name, s.proposedName) : undefined),
-          newName: s.proposedName,
-          action: s.action,
-          size: s.originalFile.size,
-          lastModified: new Date(s.originalFile.lastModified).toISOString(),
-        })),
+        changes: appliedSuggestions.map(s => {
+          const applyRes = result.results.find(r => r.fileId === s.fileId);
+          return {
+            fileId: s.fileId,
+            originalPath: s.originalFile.path,
+            originalName: s.originalFile.name,
+            newPath: applyRes?.newPath,
+            newName: applyRes?.newPath ? applyRes.newPath.split(/[\\/]/).pop() : s.proposedName,
+            action: s.action,
+            size: s.originalFile.size,
+            lastModified: new Date(s.originalFile.lastModified).toISOString(),
+          };
+        }),
       };
 
       // Update cache with decisions - mark applied and rejected
       const cachedEntry = getCachedEntry(state.selectedFolders);
-      const succeededKeys = new Set(
-        result.results
-          .filter((item) => item.success)
-          .map((item) => `${item.fileId}:${item.action}:${item.originalPath}`)
-      );
-      const failedApprovedSuggestions = approvedSuggestions.filter((suggestion) => !succeededKeys.has(suggestionKey(suggestion)));
 
       if (cachedEntry) {
         const updatedDecisions = { ...cachedEntry.decisions };
@@ -587,7 +602,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       setState(prev => ({
         ...prev,
-        history: [historyEntry, ...prev.history],
+        history: historyEntry.changes.length > 0 || historyEntry.status === 'Failed'
+          ? [historyEntry, ...prev.history]
+          : prev.history,
         suggestions: prev.suggestions.filter((suggestion) =>
           suggestion.status === 'pending' ||
           (suggestion.status === 'approved' && failedApprovedSuggestions.some((failed) => suggestionKey(failed) === suggestionKey(suggestion)))
@@ -624,6 +641,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState(prev => ({
       ...prev,
       settings: { ...prev.settings, ...newSettings }
+    }));
+  }, []);
+
+  const recordUndoResult = useCallback((
+    entryId: string,
+    result: { undone: number; failed: number; results: Array<{ success: boolean; fileId: string; error?: string }> }
+  ) => {
+    const successfulFileIds = new Set(
+      result.results.filter((item) => item.success).map((item) => item.fileId)
+    );
+
+    if (successfulFileIds.size === 0) {
+      return;
+    }
+
+    setState(prev => ({
+      ...prev,
+      history: prev.history.map(entry => {
+        if (entry.id !== entryId) {
+          return entry;
+        }
+
+        const totalChanges = entry.changes.length;
+        const remainingChanges = entry.changes.filter(change => !successfulFileIds.has(change.fileId));
+        const revertedCount = totalChanges - remainingChanges.length;
+
+        if (revertedCount === 0) {
+          return entry;
+        }
+
+        return {
+          ...entry,
+          status: remainingChanges.length === 0 ? 'Undone' : 'Success',
+          action: remainingChanges.length === 0
+            ? `Undid ${revertedCount} change${revertedCount === 1 ? '' : 's'}`
+            : `Undid ${revertedCount} of ${totalChanges} changes`,
+          details: remainingChanges.length === 0
+            ? result.failed > 0
+              ? `${result.failed} change${result.failed === 1 ? '' : 's'} could not be undone`
+              : 'All applied changes were restored'
+            : `${remainingChanges.length} change${remainingChanges.length === 1 ? '' : 's'} still applied`,
+          changes: remainingChanges,
+        };
+      }),
     }));
   }, []);
 
@@ -679,6 +740,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }));
   }, [getCacheKey, state.selectedFolders]);
 
+  const clearHistory = useCallback(() => {
+    setState(prev => ({
+      ...prev,
+      history: [],
+    }));
+  }, []);
+
   return (
     <AppContext.Provider value={{
       ...state,
@@ -690,10 +758,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       approveAll,
       rejectAll,
       applyChanges,
+      recordUndoResult,
       updateSettings,
       resetScan,
       markAsOptimized,
       clearCache,
+      clearHistory,
     }}>
       {children}
     </AppContext.Provider>

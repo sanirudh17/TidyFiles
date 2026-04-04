@@ -843,13 +843,15 @@ For each suggestion, provide:
 - fileName: exact original filename (must match exactly)
 - action: "rename" | "delete" | "move" | "archive"
 - proposedName: new name (for rename only, include extension)
+- proposedFolder: target folder name for move/archive (e.g. "Archives", "Installers", "ISOs"). REQUIRED for move and archive actions.
 - reason: brief explanation (1 sentence)
 - confidence: "high" | "medium" | "low"
 - confidenceScore: number between 0 and 1 (e.g., 0.85)
 - aiExplanation: detailed 2-3 sentence explanation of why this change is recommended
 
 Return ONLY a valid JSON array. Example:
-[{"fileName": "example.pdf", "action": "rename", "proposedName": "2024-01-15_Report.pdf", "reason": "Add date prefix for organization", "confidence": "high", "confidenceScore": 0.92, "aiExplanation": "This file appears to be a report but lacks any date context in its name. Adding the date prefix makes it sortable chronologically and easier to find among other reports."}]
+[{"fileName": "example.pdf", "action": "rename", "proposedName": "2024-01-15_Report.pdf", "reason": "Add date prefix for organization", "confidence": "high", "confidenceScore": 0.92, "aiExplanation": "This file appears to be a report but lacks any date context in its name. Adding the date prefix makes it sortable chronologically and easier to find among other reports."},
+{"fileName": "CentOS-9.iso", "action": "move", "proposedFolder": "ISOs", "reason": "Move disk image to dedicated folder", "confidence": "medium", "confidenceScore": 0.75, "aiExplanation": "This ISO disk image file is in the root folder. Moving it to a dedicated 'ISOs' folder improves organization."}]
 
 If no suggestions needed, return: []`;
 
@@ -881,13 +883,23 @@ If no suggestions needed, return: []`;
                 if (allSuggestions.some(s => s.fileId === originalFile.id)) continue;
                 if (aiSug.confidenceScore && aiSug.confidenceScore < 0.6) continue;
                 
+                // For move/archive actions, compute proposedPath from proposedFolder or fallback
+                let computedProposedPath = aiSug.proposedPath;
+                if ((aiSug.action === 'move' || aiSug.action === 'archive') && !computedProposedPath) {
+                  const fileParts = originalFile.path.replace(/\//g, '\\').split('\\');
+                  fileParts.pop(); // Remove filename
+                  const fileDir = fileParts.join('\\');
+                  const targetFolder = aiSug.proposedFolder || (aiSug.action === 'archive' ? 'Archives' : 'Organized');
+                  computedProposedPath = `${fileDir}\\${targetFolder}\\${originalFile.name}`;
+                }
+
                 allSuggestions.push({
                   id: generateId(),
                   fileId: originalFile.id,
                   originalFile,
                   action: aiSug.action,
                   proposedName: aiSug.proposedName,
-                  proposedPath: aiSug.proposedPath,
+                  proposedPath: computedProposedPath,
                   reason: `AI: ${aiSug.reason}`,
                   confidence: aiSug.confidence || 'medium',
                   confidenceScore: aiSug.confidenceScore || confidenceToScore(aiSug.confidence || 'medium'),

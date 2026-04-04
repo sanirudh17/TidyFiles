@@ -62,7 +62,8 @@ export async function POST(request: NextRequest) {
             break;
           }
 
-          case 'move': {
+          case 'move':
+          case 'archive': {
             // Undo move: move from newPath back to originalPath
             const fromPath = change.newPath;
             const toPath = change.originalPath;
@@ -73,7 +74,9 @@ export async function POST(request: NextRequest) {
             }
 
             if (!fs.existsSync(fromPath)) {
-              result.error = 'File not found at moved location';
+              result.error = change.action === 'archive'
+                ? 'File not found at archived location'
+                : 'File not found at moved location';
               break;
             }
 

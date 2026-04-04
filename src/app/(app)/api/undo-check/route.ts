@@ -124,22 +124,13 @@ function checkFileSafety(change: ChangeEntry): ActionSafetyResult {
       }
 
       case 'delete': {
-        // For undo: file should still be deleted (not exist)
-        const fromPath = change.originalPath;
-        
-        if (fs.existsSync(fromPath)) {
-          result.status = 'changed';
-          result.reason = 'File has been restored or recreated';
-          break;
-        }
-
-        // Check if backup exists (we'd need backup path from apply)
-        result.status = 'safe'; // Can't actually undo delete without backup
-        result.reason = 'File still deleted (cannot restore without backup)';
+        result.status = 'missing';
+        result.reason = 'Deleted files cannot be restored from history without a backup path';
         break;
       }
 
-      case 'move': {
+      case 'move':
+      case 'archive': {
         const fromPath = change.originalPath;
         const toPath = change.newPath;
         
@@ -149,10 +140,12 @@ function checkFileSafety(change: ChangeEntry): ActionSafetyResult {
           break;
         }
 
-        // Check if file exists at new location
+        // Check if file exists at its current location
         if (!fs.existsSync(toPath)) {
           result.status = 'missing';
-          result.reason = 'File not found at moved location';
+          result.reason = change.action === 'archive'
+            ? 'File not found at archived location'
+            : 'File not found at moved location';
           break;
         }
 

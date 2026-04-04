@@ -108,9 +108,23 @@ async function writeFile(targetHandle: FileSystemFileHandle, file: File): Promis
 
 async function backupOriginalFile(filePath: string, file: File, backupSessionId: string): Promise<string> {
   const parts = splitPathSegments(filePath);
-  const [rootName, ...relativeParts] = parts;
-  const backupDir = await resolveDirectory(rootName, ['TidyFiles Backups', backupSessionId, ...relativeParts.slice(0, -1)], true);
-  const backupHandle = await backupDir.getFileHandle(relativeParts[relativeParts.length - 1], { create: true });
+  const [rootName] = parts;
+  const fileName = parts[parts.length - 1];
+  // Flat backup: all files go directly into TidyFiles Backups/{session}/
+  const backupDir = await resolveDirectory(rootName, ['TidyFiles Backups', backupSessionId], true);
+  
+  // Handle duplicate filenames with counter
+  let finalName = fileName;
+  let counter = 1;
+  while (await fileExists(backupDir, finalName)) {
+    const dotIdx = fileName.lastIndexOf('.');
+    const base = dotIdx !== -1 ? fileName.substring(0, dotIdx) : fileName;
+    const ext = dotIdx !== -1 ? fileName.substring(dotIdx) : '';
+    finalName = `${base} (${counter})${ext}`;
+    counter++;
+  }
+  
+  const backupHandle = await backupDir.getFileHandle(finalName, { create: true });
   await writeFile(backupHandle, file);
   return `${rootName}\\TidyFiles Backups\\${backupSessionId}`;
 }
@@ -126,7 +140,13 @@ function buildTargetPath(change: ApplyChange): string | undefined {
   }
 
   if (change.action === 'move') {
-    return change.proposedPath;
+    if (change.proposedPath) {
+      return change.proposedPath;
+    }
+    // Fallback: move into an 'Organized' subfolder under the same directory
+    const parts = splitPathSegments(change.originalPath);
+    const fileName = parts[parts.length - 1];
+    return [...parts.slice(0, -1), 'Organized', fileName].join('\\');
   }
 
   if (change.action === 'archive') {
@@ -273,21 +293,13 @@ export async function applyClientSideChanges(
 ): Promise<ApplyResponse> {
   const createBackups = options.createBackups ?? true;
   const backupSessionId = new Date().toISOString().replace(/[:.]/g, '-');
-  
-  const concurrencyLimit = 10; // Process 10 operations concurrently
-  const results: ApplyResult[] = new Array(changes.length);
-  let currentIndex = 0;
+  const results: ApplyResult[] = [];
 
-  const workers = Array(concurrencyLimit)
-    .fill(null)
-    .map(async () => {
-      while (currentIndex < changes.length) {
-        const index = currentIndex++;
-        results[index] = await applyChangeInBrowser(changes[index], createBackups, backupSessionId);
-      }
-    });
-
-  await Promise.all(workers);
+  // File system handle operations are safer when processed in order.
+  // Concurrent renames in the same directory can race on existence checks.
+  for (const change of changes) {
+    results.push(await applyChangeInBrowser(change, createBackups, backupSessionId));
+  }
 
   const applied = results.filter((result) => result?.success).length;
   const failed = results.length - applied;
@@ -353,4 +365,257 @@ export async function applyFileChanges(
     results: allResults,
     backupLocation: combinedBackupLocation
   };
+}
+
+// --- Client-side undo safety check & execution ---
+
+interface HistoryChange {
+  fileId: string;
+  originalPath: string;
+  originalName: string;
+  newPath?: string;
+  newName?: string;
+  action: string;
+  size?: number;
+}
+
+interface ActionSafetyResult {
+  fileId: string;
+  originalPath: string;
+  action: string;
+  status: 'safe' | 'changed' | 'missing';
+  reason?: string;
+}
+
+async function checkFileExistsByPath(filePath: string): Promise<boolean> {
+  const parts = splitPathSegments(filePath);
+  if (parts.length < 2) return false;
+  const [rootName, ...relParts] = parts;
+  const fileName = relParts.pop();
+  if (!fileName) return false;
+  try {
+    const dir = await resolveDirectory(rootName, relParts, false);
+    return await fileExists(dir, fileName);
+  } catch {
+    return false;
+  }
+}
+
+export function hasDirectoryHandles(): boolean {
+  return directoryHandleRegistry.size > 0;
+}
+
+export function canUndoClientSide(changes: HistoryChange[]): boolean {
+  if (typeof window === 'undefined' || changes.length === 0) {
+    return false;
+  }
+
+  return changes.every((change) => {
+    const paths = [change.originalPath, change.newPath].filter(Boolean) as string[];
+    return paths.every((filePath) => {
+      if (isAbsoluteFilesystemPath(filePath)) {
+        return false;
+      }
+
+      return hasDirectoryHandle(rootNameFromPath(filePath));
+    });
+  });
+}
+
+export async function checkUndoSafetyClientSide(
+  changes: HistoryChange[]
+): Promise<{
+  overallSafety: 'safe' | 'partial' | 'unsafe';
+  message: string;
+  summary: { total: number; safe: number; changed: number; missing: number };
+  actions: ActionSafetyResult[];
+}> {
+  if (directoryHandleRegistry.size === 0) {
+    return {
+      overallSafety: 'unsafe',
+      message: 'Folder access has expired. Re-scan to enable undo.',
+      summary: { total: changes.length, safe: 0, changed: 0, missing: changes.length },
+      actions: changes.map(c => ({
+        fileId: c.fileId, originalPath: c.originalPath, action: c.action,
+        status: 'missing' as const, reason: 'No folder access',
+      })),
+    };
+  }
+
+  const actionResults: ActionSafetyResult[] = [];
+
+  for (const change of changes) {
+    const result: ActionSafetyResult = {
+      fileId: change.fileId, originalPath: change.originalPath,
+      action: change.action, status: 'safe',
+    };
+
+    try {
+      if (change.action === 'rename' && change.newPath) {
+        const renamedExists = await checkFileExistsByPath(change.newPath);
+        if (!renamedExists) {
+          result.status = 'missing';
+          result.reason = 'Renamed file not found';
+        } else {
+          const origExists = await checkFileExistsByPath(change.originalPath);
+          if (origExists) {
+            result.status = 'changed';
+            result.reason = 'A file already exists at original path';
+          }
+        }
+      } else if ((change.action === 'move' || change.action === 'archive') && change.newPath) {
+        const movedExists = await checkFileExistsByPath(change.newPath);
+        if (!movedExists) {
+          result.status = 'missing';
+          result.reason = change.action === 'archive' ? 'Archived file not found' : 'Moved file not found';
+        } else {
+          const origExists = await checkFileExistsByPath(change.originalPath);
+          if (origExists) {
+            result.status = 'changed';
+            result.reason = 'A file already exists at the original location';
+          }
+        }
+      } else if (change.action === 'delete') {
+        result.status = 'missing';
+        result.reason = 'This change cannot be restored automatically from history';
+      } else {
+        result.status = 'missing';
+        result.reason = 'Cannot determine undo path';
+      }
+    } catch {
+      result.status = 'missing';
+      result.reason = 'Error checking file';
+    }
+
+    actionResults.push(result);
+  }
+
+  const safeCount = actionResults.filter(r => r.status === 'safe').length;
+  const changedCount = actionResults.filter(r => r.status === 'changed').length;
+  const missingCount = actionResults.filter(r => r.status === 'missing').length;
+
+  let overallSafety: 'safe' | 'partial' | 'unsafe';
+  let message: string;
+
+  if (safeCount === changes.length) {
+    overallSafety = 'safe';
+    message = 'All changes can be safely undone';
+  } else if (safeCount > 0) {
+    overallSafety = 'partial';
+    message = `${safeCount} of ${changes.length} changes can be undone`;
+  } else {
+    overallSafety = 'unsafe';
+    message = 'No changes can be undone';
+  }
+
+  return { overallSafety, message, summary: { total: changes.length, safe: safeCount, changed: changedCount, missing: missingCount }, actions: actionResults };
+}
+
+export async function performUndoClientSide(
+  changes: HistoryChange[]
+): Promise<{
+  success: boolean;
+  undone: number;
+  failed: number;
+  results: Array<{ success: boolean; fileId: string; action: string; error?: string }>;
+}> {
+  let undone = 0;
+  let failed = 0;
+  const results: Array<{ success: boolean; fileId: string; action: string; error?: string }> = [];
+
+  for (const change of changes) {
+    const result = {
+      success: false,
+      fileId: change.fileId,
+      action: change.action,
+      error: undefined as string | undefined,
+    };
+
+    try {
+      if (change.action === 'rename' && change.newPath) {
+        const newParts = splitPathSegments(change.newPath);
+        const [rootName, ...newRelParts] = newParts;
+        const newFileName = newRelParts.pop();
+        if (!newFileName) {
+          result.error = 'Missing renamed file name';
+          failed++;
+          results.push(result);
+          continue;
+        }
+
+        const dir = await resolveDirectory(rootName, newRelParts, false);
+        const fileHandle = await dir.getFileHandle(newFileName);
+        const file = await fileHandle.getFile();
+
+        const origFileName = change.originalName || splitPathSegments(change.originalPath).pop();
+        if (!origFileName) {
+          result.error = 'Missing original file name';
+          failed++;
+          results.push(result);
+          continue;
+        }
+
+        if (await fileExists(dir, origFileName)) {
+          result.error = 'Cannot restore because the original name is already in use';
+          failed++;
+          results.push(result);
+          continue;
+        }
+
+        const newHandle = await dir.getFileHandle(origFileName, { create: true });
+        await writeFile(newHandle, file);
+        await dir.removeEntry(newFileName);
+        undone++;
+        result.success = true;
+      } else if ((change.action === 'move' || change.action === 'archive') && change.newPath) {
+        const newParts = splitPathSegments(change.newPath);
+        const [newRoot, ...newRelParts] = newParts;
+        const newFileName = newRelParts.pop();
+        if (!newFileName) {
+          result.error = 'Missing moved file name';
+          failed++;
+          results.push(result);
+          continue;
+        }
+
+        const srcDir = await resolveDirectory(newRoot, newRelParts, false);
+        const fh = await srcDir.getFileHandle(newFileName);
+        const file = await fh.getFile();
+
+        const origParts = splitPathSegments(change.originalPath);
+        const [origRoot, ...origRelParts] = origParts;
+        const origFileName = origRelParts.pop();
+        if (!origFileName) {
+          result.error = 'Missing original destination file name';
+          failed++;
+          results.push(result);
+          continue;
+        }
+
+        const destDir = await resolveDirectory(origRoot, origRelParts, true);
+        if (await fileExists(destDir, origFileName)) {
+          result.error = 'Cannot restore because the original location is already occupied';
+          failed++;
+          results.push(result);
+          continue;
+        }
+        const destHandle = await destDir.getFileHandle(origFileName, { create: true });
+        await writeFile(destHandle, file);
+        await srcDir.removeEntry(newFileName);
+        undone++;
+        result.success = true;
+      } else {
+        failed++;
+        result.error = 'This change type cannot be undone from the browser';
+      }
+    } catch (err) {
+      console.error('Undo failed for', change.originalPath, err);
+      failed++;
+      result.error = err instanceof Error ? err.message : 'Unknown error';
+    }
+
+    results.push(result);
+  }
+
+  return { success: failed === 0, undone, failed, results };
 }

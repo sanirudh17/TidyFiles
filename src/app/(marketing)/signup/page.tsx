@@ -115,16 +115,39 @@ export default function SignUpPage() {
             }
 
             // Supabase Authentication
-            const { error } = await supabase.auth.signUp({
+            const { data, error } = await supabase.auth.signUp({
                 email: emailInput.value,
                 password: passwordInput.value,
+                options: {
+                    emailRedirectTo: window.location.origin + '/scan',
+                },
             });
 
             if (error) {
                 submitButton.disabled = false;
                 submitButton.innerHTML = 'Create account';
                 if (messageBox) {
-                    messageBox.textContent = error.message;
+                    // Provide user-friendly messages for common errors
+                    if (error.message.toLowerCase().includes('rate limit')) {
+                        messageBox.innerHTML = 'Too many sign-up attempts. Please wait a few minutes and try again, or <a href="/signin" style="color: inherit; text-decoration: underline; font-weight: 600;">try signing in</a> if you already have an account.';
+                    } else if (error.message.toLowerCase().includes('already registered')) {
+                        messageBox.innerHTML = 'This email is already registered. <a href="/signin" style="color: inherit; text-decoration: underline; font-weight: 600;">Sign in instead</a>.';
+                    } else {
+                        messageBox.textContent = error.message;
+                    }
+                    messageBox.classList.add("is-visible", "is-info");
+                }
+                return;
+            }
+
+            // Check if user was confirmed immediately (autoconfirm enabled)
+            // or if confirmation email was sent
+            const needsConfirmation = data?.user?.identities?.length === 0;
+            if (needsConfirmation) {
+                submitButton.disabled = false;
+                submitButton.innerHTML = 'Create account';
+                if (messageBox) {
+                    messageBox.innerHTML = 'This email is already registered. <a href="/signin" style="color: inherit; text-decoration: underline; font-weight: 600;">Sign in instead</a>.';
                     messageBox.classList.add("is-visible", "is-info");
                 }
                 return;
